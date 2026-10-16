@@ -94,42 +94,71 @@ def main():
     assert len(Playlist.live(item["strokes"])) == 4 and len(Playlist.live(item["comments"])) == 2
     win.grab().save(os.path.join(SHOTS, "1_review.png"))
 
-    # --- visibility toggles (view-only: the playlist must not change) ---
+    # --- grouped trees: visibility (view-only) and deleting (own only) ---
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtCore import QEvent
     from blendsketch.playlist import canonical
     prefs.author = "dana"
     win.canvas.author = "dana"
+    win._refresh_notes()
     win.save()
     before = canonical(win.pl.data)
+    tree = win.stroke_tree
 
-    # hide all of the lead's strokes: their comment stays
-    win._author_toggled("lead", "strokes", False)
+    def top(t, name):
+        return next(t.topLevelItem(i) for i in range(t.topLevelItemCount()) if t.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole) == name)
+
+    order = [tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole) for i in range(tree.topLevelItemCount())]
+    assert order == ["dana", "lead"], (order, win.player.frame, sorted(win.all_by_frame))
+    assert top(tree, "dana").childCount() == 3 and top(tree, "lead").childCount() == 1
+
+    # author checkbox hides all of lead's strokes; lead's comment stays
+    top(tree, "lead").setCheckState(0, Qt.CheckState.Unchecked)
+    pump(0.05)
     assert all(s["author"] != "lead" for s in win.canvas.strokes)
-    assert any(c["author"] == "lead" for c in win._visible_comments()), "lead's comment still shown"
-    win._author_toggled("lead", "comments", False)
+    assert any(c["author"] == "lead" for c in win._visible_comments())
+    top(tree, "lead").setCheckState(0, Qt.CheckState.Checked)
+    pump(0.05)
+    top(win.comment_tree, "lead").setCheckState(0, Qt.CheckState.Unchecked)
+    pump(0.05)
     assert all(c["author"] != "lead" for c in win._visible_comments())
-    win._author_toggled("lead", "comments", True)
-    win._author_toggled("lead", "strokes", True)
+    top(win.comment_tree, "lead").setCheckState(0, Qt.CheckState.Checked)
+    pump(0.05)
 
-    # hide one individual stroke of someone else's through the This frame list
-    lst = win.frame_panel.list
-    lead_row = next(lst.item(i) for i in range(lst.count()) if "lead" in lst.item(i).text())
-    lead_row.setCheckState(Qt.CheckState.Unchecked)
-    pump(0.1)
-    assert all(s["author"] != "lead" for s in win.canvas.strokes), "lead's ellipse hidden"
-    assert len(win.canvas.strokes) == 3
+    # individual stroke checkbox (someone else's)
+    top(tree, "lead").child(0).setCheckState(0, Qt.CheckState.Unchecked)
+    pump(0.05)
+    assert all(s["author"] != "lead" for s in win.canvas.strokes) and len(win.canvas.strokes) == 3
     win.grab().save(os.path.join(SHOTS, "2_stroke_hidden.png"))
-
-    # hide one of dana's own strokes; "Clear mine" must leave hidden and others' strokes alone
-    arrow = next(s for s in win.canvas.strokes if s["kind"] == "arrow")
-    win._stroke_toggled(arrow["id"], False)
+    top(tree, "lead").child(0).setCheckState(0, Qt.CheckState.Checked)
+    pump(0.05)
     assert canonical(win.pl.data) == before, "toggling never changes the playlist"
-    assert win.prefs.view_state(win.pl.data["id"])["strokes"], "hidden state remembered on this machine"
-    win.clear_mine()
+    assert win.prefs.view_state(win.pl.data["id"]) is not None
+
+    # multi-select dana's two brushes + lead's ellipse, press Delete: only dana's go
+    tree.clearSelection()
+    d = top(tree, "dana")
+    brushes = [d.child(k) for k in range(d.childCount()) if d.child(k).text(0).startswith("Brush")]
+    for c in brushes + [top(tree, "lead").child(0)]:
+        c.setSelected(True)
+    tree.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Backspace, Qt.KeyboardModifier.NoModifier))
+    pump(0.05)
     live = Playlist.live(win._item()["strokes"])
-    assert {s["author"] for s in live} == {"dana", "lead"} and len(live) == 2, "only dana's visible brushes cleared"
+    assert len(live) == 2 and {s["author"] for s in live} == {"dana", "lead"}, "dana's brushes deleted, lead's kept"
+    win.grab().save(os.path.join(SHOTS, "2b_after_delete.png"))
     win.undo()
-    win._show_all_on_frame()
-    assert len(win.canvas.strokes) == 4, "Show all brings both back"
+    assert len(Playlist.live(win._item()["strokes"])) == 4, "undo restores both"
+
+    # deleting your own comment through the comments tree
+    ct = win.comment_tree
+    mine = top(ct, "dana").child(0)
+    ct.clearSelection()
+    mine.setSelected(True)
+    ct.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier))
+    pump(0.05)
+    assert len(Playlist.live(win._item()["comments"])) == 1
+    win.undo()
+    assert len(Playlist.live(win._item()["comments"])) == 2
 
     # eraser only removes your own marks
     prefs.author = "dana"

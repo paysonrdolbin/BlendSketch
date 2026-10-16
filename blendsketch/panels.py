@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import datetime as dt
 
-from PySide6.QtCore import QRunnable, QSize, Qt, QThreadPool, QObject, Signal
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
-    QToolButton, QVBoxLayout, QWidget,
+    QToolButton, QTreeWidget, QTreeWidgetItem, QMenu, QVBoxLayout, QWidget,
 )
 
 from .colors import author_color
@@ -185,162 +185,201 @@ class PlaylistPanel(QWidget):
             self.filesDropped.emit(paths)
 
 
-# ---------------------------------------------------------------- authors
+# ---------------------------------------------------------------- notes trees
 
-class AuthorsPanel(QWidget):
-    """One row per person: show or hide all of their strokes, and separately all of their comments.
-    Hiding only changes what you see; it never changes the playlist."""
-
-    visibilityChanged = Signal(str, str, bool)  # author, "strokes" | "comments", visible
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.lay = QVBoxLayout(self)
-        self.lay.setContentsMargins(0, 0, 0, 0)
-        self.lay.setSpacing(4)
-
-    def set_authors(self, counts: dict[str, tuple[int, int]], hidden_strokes: set[str], hidden_comments: set[str], me: str):
-        while self.lay.count():
-            w = self.lay.takeAt(0).widget()
-            if w:
-                w.hide()
-                w.deleteLater()
-        names = sorted(set(counts) | {me}, key=lambda n: (n != me, n.lower()))
-        for n in names:
-            ns, nc = counts.get(n, (0, 0))
-            row = QWidget()
-            h = QHBoxLayout(row)
-            h.setContentsMargins(0, 0, 0, 0)
-            h.setSpacing(10)
-            who = QLabel(f"{n}{'  (you)' if n == me else ''}")
-            who.setStyleSheet(f"color: {author_color(n)}; font-weight: 600;")
-            who.setMinimumWidth(0)
-            who.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-            who.setToolTip(n)
-            h.addWidget(who, 1)
-            for kind, ic, count, hidden in (("strokes", "brush", ns, hidden_strokes), ("comments", "comment", nc, hidden_comments)):
-                b = QToolButton()
-                b.setObjectName("VisToggle")
-                b.setCheckable(True)
-                b.setChecked(n not in hidden)
-                b.setIcon(icon(ic, "#5b6170", "#e6e8ee"))
-                b.setText(str(count))
-                b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-                b.setToolTip(f"Show or hide all of {n}'s {kind} (only on this machine)")
-                b.toggled.connect(lambda on, nn=n, k=kind: self.visibilityChanged.emit(nn, k, on))
-                h.addWidget(b)
-            self.lay.addWidget(row)
+AUTHOR_ROLE = Qt.ItemDataRole.UserRole       # author name, on author rows
+ID_ROLE = Qt.ItemDataRole.UserRole + 1       # record id, on item rows
+MINE_ROLE = Qt.ItemDataRole.UserRole + 2
+RAW_ROLE = Qt.ItemDataRole.UserRole + 3      # unwrapped text, on comment rows
 
 
-# ---------------------------------------------------------------- this frame
-
-class FramePanel(QWidget):
-    """Strokes on the current frame, each with its own show/hide checkbox."""
-
-    clearRequested = Signal()
-    strokeToggled = Signal(str, bool)
-    showAllRequested = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
-        self.info = QLabel()
-        lay.addWidget(self.info)
-        top = QHBoxLayout()
-        top.addStretch(1)
-        self.show_all = QPushButton("Show all")
-        self.show_all.setToolTip("Show every stroke you've hidden on this frame")
-        self.show_all.clicked.connect(self.showAllRequested)
-        self.clear_btn = QPushButton("Clear mine")
-        self.clear_btn.setToolTip("Delete your visible marks on this frame. Other people's marks can only be hidden.")
-        self.clear_btn.clicked.connect(self.clearRequested)
-        top.addWidget(self.show_all)
-        top.addWidget(self.clear_btn)
-        lay.addLayout(top)
-        self.list = QListWidget()
-        self.list.setObjectName("StrokeList")
-        self.list.setMaximumHeight(150)
-        self.list.itemChanged.connect(self._changed)
-        lay.addWidget(self.list)
-
-    def _changed(self, it):
-        sid = it.data(Qt.ItemDataRole.UserRole)
-        if sid:
-            self.strokeToggled.emit(sid, it.checkState() == Qt.CheckState.Checked)
-
-    def set_frame(self, frame: int, strokes: list[dict], hidden_ids: set[str], hidden_authors: set[str], me: str):
-        n_hidden = sum(1 for s in strokes if s["id"] in hidden_ids or s["author"] in hidden_authors)
-        text = f"Frame {frame + 1}  ·  {len(strokes)} mark{'s' if len(strokes) != 1 else ''}"
-        if n_hidden:
-            text += f"  ·  {n_hidden} hidden"
-        self.info.setText(text)
-        self.show_all.setVisible(any(s["id"] in hidden_ids for s in strokes))
-        self.clear_btn.setEnabled(any(s["author"] == me and s["id"] not in hidden_ids and me not in hidden_authors for s in strokes))
-        self.list.blockSignals(True)
-        self.list.clear()
-        if not strokes:
-            it = QListWidgetItem("Nothing drawn on this frame.")
-            it.setForeground(QColor("#8a91a2"))
-            self.list.addItem(it)
-        for s in reversed(strokes):
-            label = TOOL_LABELS.get(s["kind"], s["kind"])
-            if s["kind"] == "text":
-                label += f" “{s.get('text', '')[:16]}”"
-            it = QListWidgetItem(dot_icon(s["color"], 10), f"{label}  —  {s['author']}    {BLENDS.get(s['blend'], ('?',))[0]} {round(s['opacity'] * 100)}%")
-            it.setData(Qt.ItemDataRole.UserRole, s["id"])
-            if s["author"] in hidden_authors:
-                # Hidden along with all of this person's strokes: unhide them in Authors first.
-                it.setFlags(Qt.ItemFlag.ItemIsUserCheckable)
-                it.setCheckState(Qt.CheckState.Unchecked)
-                it.setToolTip(f"Hidden with all of {s['author']}'s strokes. Turn them back on in Authors.")
+def wrap_text(text: str, fm, width: int) -> str:
+    """Break text into lines that fit width pixels (Qt's own item wrapping is unreliable in trees)."""
+    out = []
+    for para in text.split("\n"):
+        line = ""
+        for word in para.split(" "):
+            trial = f"{line} {word}" if line else word
+            if fm.horizontalAdvance(trial) <= width or not line:
+                line = trial
             else:
-                it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
-                it.setCheckState(Qt.CheckState.Unchecked if s["id"] in hidden_ids else Qt.CheckState.Checked)
-                it.setToolTip("Show or hide this stroke (only on this machine)")
-            self.list.addItem(it)
-        self.list.blockSignals(False)
+                out.append(line)
+                line = word
+        out.append(line)
+    return "\n".join(out)     # True for the viewer's own items
 
 
-# ---------------------------------------------------------------- comments
+class NotesTree(QTreeWidget):
+    """The current frame's strokes or comments, grouped by author, each with a show/hide checkbox.
 
-class CommentCard(QFrame):
-    def __init__(self, c: dict, tc: str, here: bool, mine: bool, on_jump, on_delete):
-        super().__init__()
-        self.setObjectName("CommentHere" if here else "Comment")
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 6, 8, 8)
-        lay.setSpacing(4)
-        head = QHBoxLayout()
-        jump = QPushButton(f"F {c['frame'] + 1} · {tc}")
-        jump.setObjectName("FrameChip")
-        jump.clicked.connect(on_jump)
-        who = QLabel(c["author"])
-        who.setStyleSheet(f"color: {author_color(c['author'])}; font-weight: 600;")
-        when = QLabel(fmt_time(c["created"]))
-        when.setObjectName("Muted")
-        head.addWidget(jump)
-        head.addWidget(who)
-        head.addWidget(when)
-        head.addStretch(1)
+    Author checkboxes work like a layer group: unchecking hides everything that person
+    has made (now and later) while keeping the item checkboxes underneath as they were.
+    Visibility is per machine and never changes the playlist. Select items (Shift/Cmd for
+    several) and press Delete/Backspace or right-click to delete; only your own can be.
+    """
+
+    authorToggled = Signal(str, bool)
+    itemToggled = Signal(list, bool)    # record ids, visible
+    deleteRequested = Signal(list)      # record ids (the window keeps only the viewer's own)
+
+    def __init__(self, kind: str, parent=None):
+        super().__init__(parent)
+        self.kind = kind
+        self.setObjectName("NotesTree")
+        self.setHeaderHidden(True)
+        self.setColumnCount(1)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setIndentation(22)
+        self.setUniformRowHeights(False)
+        self.wrap = kind == "comments"
+        self.setTextElideMode(Qt.TextElideMode.ElideNone if self.wrap else Qt.TextElideMode.ElideRight)
+        self.header().setStretchLastSection(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._menu)
+        self.itemChanged.connect(self._changed)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.cap = 320 if kind == "comments" else 280
+        self.collapsed: set[str] = set()
+        self.itemCollapsed.connect(lambda it: (it.data(0, AUTHOR_ROLE) and self.collapsed.add(it.data(0, AUTHOR_ROLE)), self._fit_height()))
+        self.itemExpanded.connect(lambda it: (self.collapsed.discard(it.data(0, AUTHOR_ROLE)), self._fit_height()))
+
+    # -- building
+
+    def set_groups(self, groups: list[tuple[str, list[dict]]], hidden_authors: set[str], hidden_items: set[str],
+                   me: str, label):
+        """groups: [(author, this frame's records)]; label(record) -> row text."""
+        selected = {it.data(0, ID_ROLE) or ("@" + (it.data(0, AUTHOR_ROLE) or "")) for it in self.selectedItems()}
+        bar = self.verticalScrollBar().value()
+        self.blockSignals(True)
+        self.clear()
+        bold = QFont(self.font())
+        bold.setBold(True)
+        if not groups:
+            empty = QTreeWidgetItem([f"No {self.kind} on this frame."])
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.addTopLevelItem(empty)
+        for author, recs in groups:
+            shown = author not in hidden_authors
+            top = QTreeWidgetItem([f"{author}{'  (you)' if author == me else ''}   {len(recs)}"])
+            top.setData(0, AUTHOR_ROLE, author)
+            top.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
+            top.setCheckState(0, Qt.CheckState.Checked if shown else Qt.CheckState.Unchecked)
+            top.setForeground(0, QColor(author_color(author)))
+            top.setFont(0, bold)
+            top.setToolTip(0, f"Show or hide all of {author}'s {self.kind} (only on this machine)")
+            self.addTopLevelItem(top)
+            for r in recs:
+                child = QTreeWidgetItem([label(r)])
+                child.setData(0, RAW_ROLE, label(r))
+                child.setData(0, ID_ROLE, r["id"])
+                child.setData(0, MINE_ROLE, r["author"] == me)
+                child.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
+                child.setCheckState(0, Qt.CheckState.Unchecked if r["id"] in hidden_items else Qt.CheckState.Checked)
+                if self.kind == "strokes":
+                    child.setIcon(0, dot_icon(r["color"], 10))
+                if not shown or r["id"] in hidden_items:
+                    child.setForeground(0, QColor("#5b6170"))
+                if not shown:
+                    child.setToolTip(0, f"Hidden with all of {author}'s {self.kind}")
+                top.addChild(child)
+                if r["id"] in selected:
+                    child.setSelected(True)
+            if "@" + author in selected:
+                top.setSelected(True)
+            top.setExpanded(author not in self.collapsed)
+        self.blockSignals(False)
+        self._fit_height()
+        self.verticalScrollBar().setValue(bar)
+
+    def _fit_height(self):
+        """Wrap comment text to the panel width, then grow with the content up to a cap."""
+        fm = self.fontMetrics()
+        width = max(100, self.viewport().width() - self.indentation() - 40)
+        h = 8
+        self.blockSignals(True)
+        for i in range(self.topLevelItemCount()):
+            top = self.topLevelItem(i)
+            h += fm.height() + 10
+            for k in range(top.childCount()):
+                child = top.child(k)
+                if self.wrap and child.data(0, RAW_ROLE) is not None:
+                    child.setText(0, wrap_text(child.data(0, RAW_ROLE), fm, width))
+                if top.isExpanded():
+                    h += (child.text(0).count("\n") + 1) * fm.height() + 10
+        self.blockSignals(False)
+        self.setFixedHeight(min(self.cap, max(44, h)))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if e.oldSize().width() != e.size().width():
+            self._fit_height()
+
+    # -- interaction
+
+    def _changed(self, it, col):
+        # Emit after Qt finishes handling the click: the handlers rebuild this tree, and
+        # deleting the item Qt is still updating would crash.
+        on = it.checkState(0) == Qt.CheckState.Checked
+        if it.data(0, AUTHOR_ROLE):
+            name = it.data(0, AUTHOR_ROLE)
+            QTimer.singleShot(0, lambda: self.authorToggled.emit(name, on))
+        elif it.data(0, ID_ROLE):
+            # Toggling one of several selected rows toggles them all.
+            ids = self._selected_ids() if it.isSelected() else [it.data(0, ID_ROLE)]
+            QTimer.singleShot(0, lambda: self.itemToggled.emit(ids, on))
+
+    def _selected_ids(self) -> list[str]:
+        ids = []
+        for it in self.selectedItems():
+            if it.data(0, ID_ROLE):
+                ids.append(it.data(0, ID_ROLE))
+            elif it.data(0, AUTHOR_ROLE):
+                ids += [it.child(k).data(0, ID_ROLE) for k in range(it.childCount())]
+        return list(dict.fromkeys(ids))
+
+    def _selected_mine(self) -> list[str]:
+        mine = set()
+        for i in range(self.topLevelItemCount()):
+            top = self.topLevelItem(i)
+            for k in range(top.childCount()):
+                if top.child(k).data(0, MINE_ROLE):
+                    mine.add(top.child(k).data(0, ID_ROLE))
+        return [i for i in self._selected_ids() if i in mine]
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.selectedItems():
+            ids = self._selected_ids()
+            QTimer.singleShot(0, lambda: self.deleteRequested.emit(ids))
+            return
+        super().keyPressEvent(e)
+
+    def _menu(self, pos):
+        it = self.itemAt(pos)
+        if it is not None and not it.isSelected():
+            self.clearSelection()
+            it.setSelected(True)
+        ids = self._selected_ids()
+        if not ids:
+            return
+        mine = self._selected_mine()
+        m = QMenu(self)
+        noun = self.kind if len(ids) != 1 else self.kind[:-1]
+        m.addAction(f"Show {len(ids)} {noun}", lambda: self.itemToggled.emit(ids, True))
+        m.addAction(f"Hide {len(ids)} {noun}", lambda: self.itemToggled.emit(ids, False))
+        m.addSeparator()
         if mine:
-            d = QToolButton()
-            d.setText("✕")
-            d.setObjectName("DeleteBtn")
-            d.setToolTip("Delete comment")
-            d.clicked.connect(on_delete)
-            head.addWidget(d)
-        lay.addLayout(head)
-        body = QLabel(c["text"])
-        body.setWordWrap(True)
-        body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        lay.addWidget(body)
+            label = f"Delete {len(mine)} {self.kind if len(mine) != 1 else self.kind[:-1]}"
+            if len(mine) < len(ids):
+                label += f" (yours only; {len(ids) - len(mine)} by others can only be hidden)"
+            m.addAction(label, lambda: self.deleteRequested.emit(ids))
+        else:
+            a = m.addAction("Delete (only your own notes can be deleted)")
+            a.setEnabled(False)
+        m.exec(self.viewport().mapToGlobal(pos))
 
 
-class CommentsPanel(QWidget):
-    jumpRequested = Signal(int)
-    deleteRequested = Signal(str)
+class ComposeBox(QWidget):
     addRequested = Signal(str)
 
     def __init__(self, parent=None):
@@ -348,9 +387,6 @@ class CommentsPanel(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        self.box = QVBoxLayout()
-        self.box.setSpacing(6)
-        lay.addLayout(self.box)
         self.text = QPlainTextEdit()
         self.text.setObjectName("Compose")
         self.text.setFixedHeight(64)
@@ -362,6 +398,9 @@ class CommentsPanel(QWidget):
         self.add.clicked.connect(self._submit)
         row.addWidget(self.add)
         lay.addLayout(row)
+
+    def set_frame(self, frame: int):
+        self.text.setPlaceholderText(f"Comment on frame {frame + 1}  (\u2318/Ctrl+Enter)")
 
     def eventFilter(self, obj, e):
         if obj is self.text and e.type() == e.Type.KeyPress and e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) \
@@ -375,25 +414,6 @@ class CommentsPanel(QWidget):
         if t:
             self.addRequested.emit(t)
             self.text.clear()
-
-    def set_comments(self, comments: list[dict], frame: int, me: str, tc):
-        while self.box.count():
-            w = self.box.takeAt(0).widget()
-            if w:
-                w.hide()
-                w.deleteLater()
-        self.text.setPlaceholderText(f"Comment on frame {frame + 1}  (⌘/Ctrl+Enter)")
-        if not comments:
-            lab = QLabel("No comments yet. Notes attach to the frame you're on.")
-            lab.setObjectName("Muted")
-            lab.setWordWrap(True)
-            self.box.addWidget(lab)
-            return
-        for c in sorted(comments, key=lambda c: (c["frame"], c["created"])):
-            self.box.addWidget(CommentCard(
-                c, tc(c["frame"]), c["frame"] == frame, c["author"] == me,
-                lambda _=False, f=c["frame"]: self.jumpRequested.emit(f),
-                lambda _=False, i=c["id"]: self.deleteRequested.emit(i)))
 
 
 # ---------------------------------------------------------------- preferences

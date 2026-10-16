@@ -17,10 +17,10 @@ from .canvas import Canvas
 from .colors import author_color
 from .icons import icon
 from .media import MediaError, Player, VideoReader, frame_to_qimage, probe
-from .panels import AuthorsPanel, CommentsPanel, FramePanel, PlaylistPanel, PrefsDialog, scroll_wrap
+from .panels import ComposeBox, NotesTree, PlaylistPanel, PrefsDialog, scroll_wrap
 from .playlist import EXT, Playlist, PlaylistError, find_by_name, new_id, now
 from .prefs import Prefs
-from .strokes import MAIN_BLENDS
+from .strokes import BLENDS, MAIN_BLENDS, TOOL_LABELS
 from .timeline import Timeline
 from .widgets import BlendPanel, BrushPanel, ColorPanel, section_label
 
@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
         self.hidden_stroke_authors: set[str] = set()
         self.hidden_comment_authors: set[str] = set()
         self.hidden_strokes: set[str] = set()
+        self.hidden_comments: set[str] = set()
         self.undo_stack: list = []
         self.redo_stack: list = []
         self.dirty = False
@@ -227,11 +228,17 @@ class MainWindow(QMainWindow):
         self.blend = BlendPanel()
         self.color = ColorPanel(self.prefs)
         self.brush = BrushPanel()
-        self.authors = AuthorsPanel()
-        self.frame_panel = FramePanel()
-        self.comments = CommentsPanel()
+        self.stroke_tree = NotesTree("strokes")
+        self.comment_tree = NotesTree("comments")
+        self.compose = ComposeBox()
+        comments_box = QWidget()
+        cbl = QVBoxLayout(comments_box)
+        cbl.setContentsMargins(0, 0, 0, 0)
+        cbl.setSpacing(6)
+        cbl.addWidget(self.comment_tree)
+        cbl.addWidget(self.compose)
         for title, w in (("Blend mode", self.blend), ("Color", self.color), ("Brush", self.brush),
-                         ("Authors", self.authors), ("This frame", self.frame_panel), ("Comments", self.comments)):
+                         ("Strokes on this frame", self.stroke_tree), ("Comments on this frame", comments_box)):
             il.addWidget(section_label(title))
             il.addWidget(w)
             sep = QWidget()
@@ -396,13 +403,13 @@ class MainWindow(QMainWindow):
         self.brush.opacityChanged.connect(self._opacity_changed)
         self.brush.pressureChanged.connect(lambda v: self.settings.__setitem__("pressure", v))
         self.brush.fillChanged.connect(lambda v: self.settings.__setitem__("fill", v))
-        self.authors.visibilityChanged.connect(self._author_toggled)
-        self.frame_panel.clearRequested.connect(self.clear_mine)
-        self.frame_panel.strokeToggled.connect(self._stroke_toggled)
-        self.frame_panel.showAllRequested.connect(self._show_all_on_frame)
-        self.comments.addRequested.connect(self.add_comment)
-        self.comments.deleteRequested.connect(self.delete_comment)
-        self.comments.jumpRequested.connect(self.goto)
+        self.stroke_tree.authorToggled.connect(lambda name, on: self._author_toggled(name, "strokes", on))
+        self.comment_tree.authorToggled.connect(lambda name, on: self._author_toggled(name, "comments", on))
+        self.stroke_tree.itemToggled.connect(lambda ids, on: self._items_toggled("strokes", ids, on))
+        self.comment_tree.itemToggled.connect(lambda ids, on: self._items_toggled("comments", ids, on))
+        self.stroke_tree.deleteRequested.connect(lambda ids: self.delete_records("strokes", ids))
+        self.comment_tree.deleteRequested.connect(lambda ids: self.delete_records("comments", ids))
+        self.compose.addRequested.connect(self.add_comment)
         pp = self.playlist_panel
         pp.itemSelected.connect(self.open_item)
         pp.orderChanged.connect(self._reordered)
@@ -547,6 +554,7 @@ class MainWindow(QMainWindow):
         self.hidden_stroke_authors = set(view.get("stroke_authors", []))
         self.hidden_comment_authors = set(view.get("comment_authors", []))
         self.hidden_strokes = set(view.get("strokes", []))
+        self.hidden_comments = set(view.get("comments", []))
         self.prefs.push_file(pl.path)
         self.playlist_panel.setEnabled(True)
         self.playlist_panel.set_playlist(pl.name, pl.path)
@@ -815,7 +823,8 @@ class MainWindow(QMainWindow):
         it = self._item()
         if not it:
             return []
-        return [c for c in Playlist.live(it["comments"]) if c["author"] not in self.hidden_comment_authors]
+        return [c for c in Playlist.live(it["comments"])
+                if c["author"] not in self.hidden_comment_authors and c["id"] not in self.hidden_comments]
 
     def _stroke_visible(self, st: dict) -> bool:
         return st["author"] not in self.hidden_stroke_authors and st["id"] not in self.hidden_strokes
@@ -839,25 +848,38 @@ class MainWindow(QMainWindow):
         self.timeline.set_marks(marks, {c["frame"] for c in self._visible_comments()})
         self.canvas.author = self.prefs.author
         self.canvas.set_strokes(self._strokes_at(self.player.frame))
-        self.authors.set_authors(self._author_counts(), self.hidden_stroke_authors, self.hidden_comment_authors, self.prefs.author)
         self._refresh_frame_panels()
         self.a_undo.setEnabled(bool(self.undo_stack))
         self.a_redo.setEnabled(bool(self.redo_stack))
 
-    def _author_counts(self) -> dict[str, tuple[int, int]]:
-        """Everyone with notes anywhere in the playlist, with their counts on the current clip."""
-        counts: dict[str, list[int]] = {name: [0, 0] for name in (self.pl.authors() if self.pl else {})}
-        it = self._item()
-        if it:
-            for k, kind in enumerate(("strokes", "comments")):
-                for r in Playlist.live(it[kind]):
-                    counts.setdefault(r["author"], [0, 0])[k] += 1
-        return {n: (a, b) for n, (a, b) in counts.items()}
+    @staticmethod
+    def _groups(records: list[dict], me: str) -> list[tuple[str, list[dict]]]:
+        """Group records by author: you first, then everyone else alphabetically."""
+        by: dict[str, list[dict]] = {}
+        for r in sorted(records, key=lambda x: x["created"]):
+            by.setdefault(r["author"], []).append(r)
+        return sorted(by.items(), key=lambda kv: (kv[0] != me, kv[0].lower()))
+
+    def _stroke_label(self, st: dict) -> str:
+        label = TOOL_LABELS.get(st["kind"], st["kind"])
+        if st["kind"] == "text":
+            label += f" \u201c{st.get('text', '')[:18]}\u201d"
+        return f"{label}   {BLENDS.get(st['blend'], ('?',))[0]} {round(st['opacity'] * 100)}%"
+
+    @staticmethod
+    def _comment_label(c: dict) -> str:
+        return c["text"]
 
     def _refresh_frame_panels(self):
         f = self.player.frame if self.player.info else 0
-        self.frame_panel.set_frame(f, self.all_by_frame.get(f, []), self.hidden_strokes, self.hidden_stroke_authors, self.prefs.author)
-        self.comments.set_comments(self._visible_comments(), f, self.prefs.author, self._tc)
+        me = self.prefs.author
+        self.stroke_tree.set_groups(self._groups(self.all_by_frame.get(f, []), me), self.hidden_stroke_authors,
+                                    self.hidden_strokes, me, self._stroke_label)
+        it = self._item()
+        comments = [c for c in Playlist.live(it["comments"]) if c["frame"] == f] if it else []
+        self.comment_tree.set_groups(self._groups(comments, me), self.hidden_comment_authors,
+                                     self.hidden_comments, me, self._comment_label)
+        self.compose.set_frame(f)
 
     def _author_toggled(self, name: str, kind: str, on: bool):
         target = self.hidden_stroke_authors if kind == "strokes" else self.hidden_comment_authors
@@ -865,29 +887,54 @@ class MainWindow(QMainWindow):
         self._save_view()
         self._refresh_notes()
 
-    def _stroke_toggled(self, sid: str, on: bool):
-        (self.hidden_strokes.discard if on else self.hidden_strokes.add)(sid)
+    def _items_toggled(self, kind: str, ids: list[str], on: bool):
+        target = self.hidden_strokes if kind == "strokes" else self.hidden_comments
+        for i in ids:
+            (target.discard if on else target.add)(i)
         self._save_view()
         self._refresh_notes()
 
-    def _show_all_on_frame(self):
-        for st in self.all_by_frame.get(self.player.frame, []):
-            self.hidden_strokes.discard(st["id"])
-        self._save_view()
-        self._refresh_notes()
+    def _stroke_toggled(self, sid: str, on: bool):
+        self._items_toggled("strokes", [sid], on)
 
     def _save_view(self):
         if not self.pl:
             return
-        live = set()
+        live_s, live_c = set(), set()
         for it in self.pl.items():
-            live |= {st["id"] for st in Playlist.live(it["strokes"])}
-        self.hidden_strokes &= live  # forget strokes that have since been deleted
+            live_s |= {r["id"] for r in Playlist.live(it["strokes"])}
+            live_c |= {r["id"] for r in Playlist.live(it["comments"])}
+        self.hidden_strokes &= live_s  # forget notes that have since been deleted
+        self.hidden_comments &= live_c
         self.prefs.set_view_state(self.pl.data["id"], {
             "stroke_authors": sorted(self.hidden_stroke_authors),
             "comment_authors": sorted(self.hidden_comment_authors),
             "strokes": sorted(self.hidden_strokes),
+            "comments": sorted(self.hidden_comments),
         })
+
+    def delete_records(self, kind: str, ids: list[str]):
+        """Delete the viewer's own strokes or comments among ids; others' can only be hidden."""
+        it = self._item()
+        if not it:
+            return
+        me = self.prefs.author
+        changes = []
+        for rid in ids:
+            rec = it[kind].get(rid)
+            if rec and rec["author"] == me and not rec.get("deleted"):
+                changes.append((kind, copy.deepcopy(rec), dict(rec, deleted=True)))
+        skipped = len(ids) - len(changes)
+        if changes:
+            self._record_changes(changes)
+        noun = kind if len(changes) != 1 else kind[:-1]
+        if changes and skipped:
+            self.status.showMessage(f"Deleted {len(changes)} {noun}. {skipped} by others can only be hidden. "
+                                    "Undo with \u2318/Ctrl+Z.", 5000)
+        elif changes:
+            self.status.showMessage(f"Deleted {len(changes)} {noun}. Undo with \u2318/Ctrl+Z.", 3000)
+        elif skipped:
+            self.status.showMessage("Only your own notes can be deleted. Uncheck others' notes to hide them.", 4000)
 
     def _record_changes(self, changes):
         """changes: list of (kind, before, after) on the current item; applied and made undoable."""
@@ -935,12 +982,6 @@ class MainWindow(QMainWindow):
         c = {"id": new_id(), "frame": self.player.frame, "author": self.prefs.author, "created": t, "modified": t,
              "deleted": False, "text": text}
         self._record_changes([("comments", None, c)])
-
-    def delete_comment(self, cid: str):
-        it = self._item()
-        rec = it["comments"].get(cid) if it else None
-        if rec and rec["author"] == self.prefs.author:
-            self._record_changes([("comments", copy.deepcopy(rec), dict(rec, deleted=True))])
 
     def _apply_history(self, entry, undo: bool):
         frame = None

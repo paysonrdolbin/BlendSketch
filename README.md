@@ -51,7 +51,20 @@ Clips that still can't be found show as **Missing**. Double-click one (or File �
 
 Every stroke, comment and clip is a record with an id, an author and a modified time. Deleting writes a tombstone, so a merge can't bring a deleted note back. When two versions of the same record meet, the newer one wins. Saving is automatic (under a second after each change) and atomic (write to a temp file, then rename), so a reader never sees a half-written file.
 
-Your name comes from Preferences (it defaults to your login name). The eraser, "Clear mine" and comment deletion only touch your own notes; other people's notes can be hidden in the Authors panel.
+Your name comes from Preferences (it defaults to your login name).
+
+The inspector lists the current frame's **Strokes** and **Comments**, grouped by person:
+
+```
+☑ dana (you)   3
+    ☑ Brush   Multiply 80%
+    ☑ Arrow   Normal 80%
+☑ lead   1
+    ☐ Ellipse   Normal 80%
+```
+
+- A person's checkbox shows or hides everything they've made, on every frame, including notes they add later. The item checkboxes underneath show or hide single notes. Hiding is saved per playlist on your machine and never changes the file, so you can hide anyone's notes.
+- Select notes (Shift- or ⌘/Ctrl-click for several) and press Delete/Backspace, or right-click ▸ Delete. Only your own notes are deleted; other people's are skipped and can only be hidden. ⌘/Ctrl+Z undoes a delete. The eraser and Edit ▸ Clear My Marks follow the same rule.
 
 ## Shortcuts
 
