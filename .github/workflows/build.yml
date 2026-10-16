@@ -1,0 +1,67 @@
+name: Build apps
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            artifact: BlendSketch-macOS
+          - os: windows-2022
+            artifact: BlendSketch-Windows
+          - os: ubuntu-22.04
+            artifact: BlendSketch-Linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Linux system libraries for Qt
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libpulse0 ffmpeg
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pytest
+      - name: Tests
+        run: python -m pytest tests/test_playlist.py -q
+      - name: Icons
+        run: python packaging/make_icons.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Build
+        run: pyinstaller --noconfirm BlendSketch.spec
+      - name: Decode check (ProRes)
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python - <<'EOF'
+          import av, fractions, numpy as np
+          c = av.open("check.mov", "w"); s = c.add_stream("prores_ks", rate=24); s.width, s.height, s.pix_fmt = 640, 360, "yuv422p10le"
+          for i in range(24):
+              f = av.VideoFrame.from_ndarray(np.full((360, 640, 3), i * 10, np.uint8), format="rgb24")
+              for p in s.encode(f): c.mux(p)
+          for p in s.encode(): c.mux(p)
+          c.close()
+          EOF
+          if [ "$RUNNER_OS" = "macOS" ]; then BIN=dist/BlendSketch.app/Contents/MacOS/BlendSketch; elif [ "$RUNNER_OS" = "Windows" ]; then BIN=dist/BlendSketch/BlendSketch.exe; else BIN=dist/BlendSketch/BlendSketch; fi
+          "$BIN" --check check.mov
+      - name: Package
+        shell: bash
+        run: |
+          cd dist
+          if [ "$RUNNER_OS" = "macOS" ]; then ditto -c -k --keepParent BlendSketch.app ../${{ matrix.artifact }}.zip
+          elif [ "$RUNNER_OS" = "Windows" ]; then 7z a ../${{ matrix.artifact }}.zip BlendSketch
+          else tar czf ../${{ matrix.artifact }}.tar.gz BlendSketch; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.*
