@@ -78,6 +78,7 @@ QListWidget::item:selected {{ background: {RAISE}; color: {FG}; border: 1px soli
 QTreeWidget#NotesTree {{ background: {WELL}; border: 1px solid {LINE}; border-radius: 6px; padding: 2px; outline: 0; font-size: 12px; }}
 QTreeWidget#NotesTree::item {{ padding: 3px 2px; border-radius: 4px; }}
 QTreeWidget#NotesTree::item:selected {{ background: {RAISE}; color: {FG}; border: 1px solid {ACCENT}; }}
+QTreeWidget#NotesTree::branch:selected {{ background: transparent; border: 0; }}
 
 QSlider::groove:horizontal {{ height: 4px; background: {LINE}; border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 2px; }}

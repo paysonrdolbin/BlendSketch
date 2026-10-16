@@ -201,19 +201,35 @@ def main():
     win.undo()
     assert len(Playlist.live(win._item()["strokes"])) == 4, "undo restores it"
 
-    # smudge drags pixels: sample a point across the red/green bar edge before and after
+    # smudge moves drawn paint only, never the footage
+    c = win.canvas
+    k = c._img_scale()
+    px = lambda x, y: c.composite_image().pixelColor(int(x * k), int(y * k))
     win.set_tool("smudge")
     win.settings["opacity"] = 0.9
-    c = win.canvas
-    before_px = c.composite_image().pixelColor(int(470 * c._img_scale()), int(100 * c._img_scale()))
-    drag(win, [(250 + i * 10, 100, 1) for i in range(30)])  # from red into green, near the top
+    before_bare = px(470, 100)
+    drag(win, [(250 + i * 10, 100, 1) for i in range(30)])  # across the red/green bars, no strokes there
+    pump(0.1)
+    assert px(470, 100).name() == before_bare.name(), "footage untouched by smudge"
+    # a thick blue pen stroke on the magenta bar, then smudge sideways out of it
+    win.set_tool("pen"); win.set_blend("normal"); win.color.set_hex("#0000ff", emit=True)
+    win.settings["sizes"]["pen"] = 40
+    win.settings["opacity"] = 1.0
+    drag(win, [(1330, 140, 1), (1330, 260, 1)])
+    pump(0.1)
+    outside = px(1420, 200)
+    win.set_tool("smudge")
+    win.settings["opacity"] = 0.9
+    drag(win, [(1320 + i * 6, 200, 1) for i in range(30)])
     pump(0.2)
-    after_px = c.composite_image().pixelColor(int(470 * c._img_scale()), int(100 * c._img_scale()))
+    after = px(1420, 200)
+    assert after.red() < outside.red() - 40, f"blue paint dragged across the magenta: {outside.name()} -> {after.name()}"
     smudges = [s for s in Playlist.live(win._item()["strokes"]) if s["kind"] == "smudge"]
-    assert len(smudges) == 1, "smudge saved as a stroke"
-    assert after_px.red() > before_px.red() + 40, f"red dragged into green: {before_px.name()} -> {after_px.name()}"
+    assert len(smudges) == 2, "smudges saved as strokes"
     win.grab().save(os.path.join(SHOTS, "2c_smudge.png"))
-    win.undo()
+    for _ in range(3):
+        win.undo()
+    win.settings["opacity"] = 0.8
     win.set_tool("brush")
 
     # eyedropper readout

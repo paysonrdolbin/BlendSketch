@@ -283,14 +283,14 @@ def rasterize(s: dict, scale: float):
 
 def composite(target: QImage, strokes, scale: float, cache: RasterCache):
     """Blend each stroke onto target (an image at `scale` x source resolution)."""
+    if any(s["kind"] == "smudge" for s in strokes):
+        stack = LayerStack(target.size(), scale, cache)
+        for s in strokes:
+            stack.push(s)
+        stack.draw(target)
+        return
     g = QPainter(target)
     for s in strokes:
-        if s["kind"] == "smudge":
-            # A smudge reworks the pixels already there, so it runs in order on the target itself.
-            g.end()
-            Smudger(target, s, scale).run()
-            g = QPainter(target)
-            continue
         hit = cache.get(s, scale)
         if hit is None:
             continue
@@ -419,3 +419,58 @@ class Smudger:
 
     def run(self):
         self.advance()
+
+
+class LayerStack:
+    """The frame's strokes as separate layers, so a smudge can move paint without touching the footage.
+
+    Each stroke keeps its own layer and blend mode. A smudge smears the paint of every layer
+    beneath it that it touches (each with its own carry), then the layers are blended onto the
+    frame in order as usual. A smudge over bare footage does nothing.
+    """
+
+    def __init__(self, size, scale: float, cache: RasterCache):
+        self.w, self.h = size.width(), size.height()
+        self.scale, self.cache = scale, cache
+        self.layers: list[list] = []  # [image, x, y, stroke, owned]
+
+    def push(self, s: dict):
+        if s["kind"] == "smudge":
+            for sm in self.smudgers(s, self._reach(s)):
+                sm.run()
+            return
+        hit = self.cache.get(s, self.scale)
+        if hit:
+            img, x, y = hit
+            self.layers.append([img, x, y, s, False])
+
+    def _reach(self, s: dict) -> QRectF:
+        k = self.scale
+        r = bbox(s)
+        return QRectF(r.left() * k, r.top() * k, r.width() * k, r.height() * k)
+
+    def smudgers(self, s: dict, reach: QRectF | None = None) -> list:
+        """Smudgers for the layers a smudge can reach (all of them when reach is None),
+        promoting each to a full-frame layer of its own so paint can move outside its old bounds."""
+        out = []
+        for layer in self.layers:
+            img, x, y = layer[0], layer[1], layer[2]
+            if reach is not None and not reach.intersects(QRectF(x, y, img.width(), img.height())):
+                continue
+            if not layer[4]:
+                full = QImage(self.w, self.h, QImage.Format.Format_ARGB32_Premultiplied)
+                full.fill(Qt.GlobalColor.transparent)
+                g = QPainter(full)
+                g.drawImage(x, y, img)
+                g.end()
+                layer[0], layer[1], layer[2], layer[4] = full, 0, 0, True
+            out.append(Smudger(layer[0], s, self.scale))
+        return out
+
+    def draw(self, target: QImage):
+        g = QPainter(target)
+        for img, x, y, s, _ in self.layers:
+            g.setCompositionMode(BLENDS.get(s["blend"], BLENDS["normal"])[1])
+            g.setOpacity(s["opacity"])
+            g.drawImage(x, y, img)
+        g.end()

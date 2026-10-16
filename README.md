@@ -2,7 +2,7 @@
 
 Frame-accurate review for footage, with drawing tools that blend (Multiply, Screen, Overlay and ten more), a Procreate-style smudge brush, and shared playlist files.
 
-The **smudge** tool (S) picks up the pixels under the brush and drags them along; the opacity slider becomes its strength, and pen pressure scales it. A smudge is stored like any other stroke, so it can be hidden, deleted and undone, and it smears whatever is beneath it (the frame and earlier marks).
+The **smudge** tool (S) picks up the pixels under the brush and drags them along; the opacity slider becomes its strength, and pen pressure scales it. A smudge is stored like any other stroke, so it can be hidden, deleted and undone, and it only moves paint from strokes drawn before it; the footage is never smudged, and each smudged stroke keeps its own blend mode.
 
 - **Plays ProRes directly.** FFmpeg (through PyAV) is built in, so ProRes 422/4444, DNxHR, H.264 (including 10-bit and 4:2:2), HEVC, image sequences' single frames and most other formats play with no proxies or conversion.
 - **Playlists are files.** A `.bsplaylist` holds the clip list plus every stroke and comment. Footage is referenced by path, not copied in, so the file stays small (kilobytes).

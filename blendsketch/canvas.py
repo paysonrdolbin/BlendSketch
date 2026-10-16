@@ -45,8 +45,9 @@ class Canvas(QWidget):
         self.live: dict | None = None
         self._live_layer: QImage | None = None
         self._brush_state = {}
-        self._smudge_img: QImage | None = None
-        self._smudger = None
+        self._smudge_stack = None  # S.LayerStack while a smudge is being drawn
+        self._smudgers = []
+        self._footage: QImage | None = None
         self._erasing: set | None = None
         self._panning = None
         self._space = False
@@ -176,7 +177,11 @@ class Canvas(QWidget):
         if self.live is None:
             return self._base
         if self.live["kind"] == "smudge":
-            return self._smudge_img
+            if self._comp is None:
+                out = self._footage.copy()
+                self._smudge_stack.draw(out)
+                self._comp = out
+            return self._comp
         if self._comp is None:
             out = self._base.copy()
             if self.live["kind"] in PAINT_TOOLS and self._live_layer is not None:
@@ -332,12 +337,18 @@ class Canvas(QWidget):
         st = dict(self.settings)
         st["size"] = self.settings["sizes"][tool]
         if tool == "smudge":
-            base = self.composite_image()
+            # Rebuild this frame's strokes as layers; the smudge works on those, never the footage.
             self.live = S.make_stroke(tool, self.frame_index, self.author, st, pt)
             self.live["blend"] = "normal"
-            self._smudge_img = base.copy()
-            self._smudger = S.Smudger(self._smudge_img, self.live, self._img_scale())
-            self._smudger.advance()
+            self._footage = self.frame_img.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+            stack = S.LayerStack(self._footage.size(), self._img_scale(), self.raster)
+            for prior in self._visible_strokes():
+                stack.push(prior)
+            self._smudge_stack = stack
+            self._smudgers = stack.smudgers(self.live)
+            for sm in self._smudgers:
+                sm.advance()
+            self._comp = None
             self.update()
             return
         self.live = S.make_stroke(tool, self.frame_index, self.author, st, pt)
@@ -386,7 +397,9 @@ class Canvas(QWidget):
             last = s["pts"][-1]
             if math.hypot(x - last[0], y - last[1]) >= 0.75 / max(self._scale(), 0.01):
                 s["pts"].append([x, y, pressure])
-                self._smudger.advance()
+                for sm in self._smudgers:
+                    sm.advance()
+                self._comp = None
                 self.update()
             return
         if s["kind"] in PAINT_TOOLS:
@@ -439,8 +452,9 @@ class Canvas(QWidget):
             return
         self.live = None
         self._live_layer = None
-        self._smudge_img = None
-        self._smudger = None
+        self._smudge_stack = None
+        self._smudgers = []
+        self._footage = None
         self._comp = None
         if s["kind"] == "smudge":
             self._base = None  # rebuilt with the smudge in its place in the stack

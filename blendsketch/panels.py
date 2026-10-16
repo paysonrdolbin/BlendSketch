@@ -27,19 +27,6 @@ def fmt_time(t: float) -> str:
     return d.strftime("%b %d %H:%M").replace(" 0", " ")
 
 
-def dot_icon(color: str, size=12) -> QIcon:
-    pm = QPixmap(size * 2, size * 2)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setBrush(QColor(color))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawRoundedRect(0, 0, size * 2, size * 2, 6, 6)
-    p.end()
-    pm.setDevicePixelRatio(2)
-    return QIcon(pm)
-
-
 # ---------------------------------------------------------------- thumbnails
 
 class _ThumbSignals(QObject):
@@ -276,8 +263,6 @@ class NotesTree(QTreeWidget):
                 child.setData(0, MINE_ROLE, r["author"] == me)
                 child.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
                 child.setCheckState(0, Qt.CheckState.Unchecked if r["id"] in hidden_items else Qt.CheckState.Checked)
-                if self.kind == "strokes":
-                    child.setIcon(0, dot_icon(r["color"], 10))
                 if not shown or r["id"] in hidden_items:
                     child.setForeground(0, QColor("#5b6170"))
                 if not shown:
