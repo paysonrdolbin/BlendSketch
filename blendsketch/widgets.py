@@ -193,6 +193,7 @@ class ColorPanel(QWidget):
         self.hex_edit.textEdited.connect(self._hex_typed)
         self.hex_edit.editingFinished.connect(self._sync)
         self.pick_btn = QToolButton()
+        self.pick_btn.setObjectName("PickButton")
         self.pick_btn.setCheckable(True)
         self.pick_btn.setIcon(icon("picker"))
         self.pick_btn.setToolTip("Eyedropper (I, or hold Alt/Option)")

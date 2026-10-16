@@ -31,7 +31,9 @@ QToolTip {{ background: {FG}; color: {BG}; border: 0; padding: 4px 6px; }}
 #Inspector {{ background: {PANEL}; }}
 QScrollArea {{ background: {PANEL}; border-left: 1px solid {LINE}; }}
 #Inspector QWidget {{ background: transparent; }}
-#Inspector QToolButton:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
+#Inspector QToolButton#PickButton:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
+#Inspector QToolButton#VisToggle {{ color: #5b6170; padding: 2px 6px; font-family: Menlo, Consolas, monospace; font-size: 11px; }}
+#Inspector QToolButton#VisToggle:checked {{ color: {FG}; background: {RAISE}; border-color: {LINE}; }}
 PlaylistPanel {{ background: {PANEL}; border-right: 1px solid {LINE}; }}
 
 QToolButton {{ background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 5px; }}

@@ -8,7 +8,7 @@ from PySide6.QtCore import QRunnable, QSize, Qt, QThreadPool, QObject, Signal
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
+    QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
     QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -188,7 +188,10 @@ class PlaylistPanel(QWidget):
 # ---------------------------------------------------------------- authors
 
 class AuthorsPanel(QWidget):
-    visibilityChanged = Signal(str, bool)
+    """One row per person: show or hide all of their strokes, and separately all of their comments.
+    Hiding only changes what you see; it never changes the playlist."""
+
+    visibilityChanged = Signal(str, str, bool)  # author, "strokes" | "comments", visible
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -196,7 +199,7 @@ class AuthorsPanel(QWidget):
         self.lay.setContentsMargins(0, 0, 0, 0)
         self.lay.setSpacing(4)
 
-    def set_authors(self, counts: dict[str, int], hidden: set[str], me: str):
+    def set_authors(self, counts: dict[str, tuple[int, int]], hidden_strokes: set[str], hidden_comments: set[str], me: str):
         while self.lay.count():
             w = self.lay.takeAt(0).widget()
             if w:
@@ -204,58 +207,100 @@ class AuthorsPanel(QWidget):
                 w.deleteLater()
         names = sorted(set(counts) | {me}, key=lambda n: (n != me, n.lower()))
         for n in names:
+            ns, nc = counts.get(n, (0, 0))
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(0, 0, 0, 0)
-            cb = QCheckBox(f"{n}{'  (you)' if n == me else ''}")
-            cb.setChecked(n not in hidden)
-            cb.setIcon(dot_icon(author_color(n)))
-            cb.toggled.connect(lambda on, nn=n: self.visibilityChanged.emit(nn, on))
-            c = QLabel(str(counts.get(n, 0)))
-            c.setObjectName("Value")
-            h.addWidget(cb, 1)
-            h.addWidget(c)
+            h.setSpacing(10)
+            who = QLabel(f"{n}{'  (you)' if n == me else ''}")
+            who.setStyleSheet(f"color: {author_color(n)}; font-weight: 600;")
+            who.setMinimumWidth(0)
+            who.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            who.setToolTip(n)
+            h.addWidget(who, 1)
+            for kind, ic, count, hidden in (("strokes", "brush", ns, hidden_strokes), ("comments", "comment", nc, hidden_comments)):
+                b = QToolButton()
+                b.setObjectName("VisToggle")
+                b.setCheckable(True)
+                b.setChecked(n not in hidden)
+                b.setIcon(icon(ic, "#5b6170", "#e6e8ee"))
+                b.setText(str(count))
+                b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+                b.setToolTip(f"Show or hide all of {n}'s {kind} (only on this machine)")
+                b.toggled.connect(lambda on, nn=n, k=kind: self.visibilityChanged.emit(nn, k, on))
+                h.addWidget(b)
             self.lay.addWidget(row)
 
 
 # ---------------------------------------------------------------- this frame
 
 class FramePanel(QWidget):
+    """Strokes on the current frame, each with its own show/hide checkbox."""
+
     clearRequested = Signal()
+    strokeToggled = Signal(str, bool)
+    showAllRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        top = QHBoxLayout()
         self.info = QLabel()
+        lay.addWidget(self.info)
+        top = QHBoxLayout()
+        top.addStretch(1)
+        self.show_all = QPushButton("Show all")
+        self.show_all.setToolTip("Show every stroke you've hidden on this frame")
+        self.show_all.clicked.connect(self.showAllRequested)
         self.clear_btn = QPushButton("Clear mine")
-        self.clear_btn.setToolTip("Remove your marks on this frame")
+        self.clear_btn.setToolTip("Delete your visible marks on this frame. Other people's marks can only be hidden.")
         self.clear_btn.clicked.connect(self.clearRequested)
-        top.addWidget(self.info, 1)
+        top.addWidget(self.show_all)
         top.addWidget(self.clear_btn)
         lay.addLayout(top)
         self.list = QListWidget()
         self.list.setObjectName("StrokeList")
-        self.list.setMaximumHeight(120)
+        self.list.setMaximumHeight(150)
+        self.list.itemChanged.connect(self._changed)
         lay.addWidget(self.list)
 
-    def set_frame(self, frame: int, strokes: list[dict], me: str):
-        self.info.setText(f"Frame {frame + 1}  ·  {len(strokes)} mark{'s' if len(strokes) != 1 else ''}")
-        self.clear_btn.setEnabled(any(s["author"] == me for s in strokes))
+    def _changed(self, it):
+        sid = it.data(Qt.ItemDataRole.UserRole)
+        if sid:
+            self.strokeToggled.emit(sid, it.checkState() == Qt.CheckState.Checked)
+
+    def set_frame(self, frame: int, strokes: list[dict], hidden_ids: set[str], hidden_authors: set[str], me: str):
+        n_hidden = sum(1 for s in strokes if s["id"] in hidden_ids or s["author"] in hidden_authors)
+        text = f"Frame {frame + 1}  ·  {len(strokes)} mark{'s' if len(strokes) != 1 else ''}"
+        if n_hidden:
+            text += f"  ·  {n_hidden} hidden"
+        self.info.setText(text)
+        self.show_all.setVisible(any(s["id"] in hidden_ids for s in strokes))
+        self.clear_btn.setEnabled(any(s["author"] == me and s["id"] not in hidden_ids and me not in hidden_authors for s in strokes))
+        self.list.blockSignals(True)
         self.list.clear()
         if not strokes:
             it = QListWidgetItem("Nothing drawn on this frame.")
             it.setForeground(QColor("#8a91a2"))
             self.list.addItem(it)
-            return
         for s in reversed(strokes):
             label = TOOL_LABELS.get(s["kind"], s["kind"])
             if s["kind"] == "text":
                 label += f" “{s.get('text', '')[:16]}”"
             it = QListWidgetItem(dot_icon(s["color"], 10), f"{label}  —  {s['author']}    {BLENDS.get(s['blend'], ('?',))[0]} {round(s['opacity'] * 100)}%")
+            it.setData(Qt.ItemDataRole.UserRole, s["id"])
+            if s["author"] in hidden_authors:
+                # Hidden along with all of this person's strokes: unhide them in Authors first.
+                it.setFlags(Qt.ItemFlag.ItemIsUserCheckable)
+                it.setCheckState(Qt.CheckState.Unchecked)
+                it.setToolTip(f"Hidden with all of {s['author']}'s strokes. Turn them back on in Authors.")
+            else:
+                it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
+                it.setCheckState(Qt.CheckState.Unchecked if s["id"] in hidden_ids else Qt.CheckState.Checked)
+                it.setToolTip("Show or hide this stroke (only on this machine)")
             self.list.addItem(it)
+        self.list.blockSignals(False)
 
 
 # ---------------------------------------------------------------- comments

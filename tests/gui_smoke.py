@@ -94,12 +94,42 @@ def main():
     assert len(Playlist.live(item["strokes"])) == 4 and len(Playlist.live(item["comments"])) == 2
     win.grab().save(os.path.join(SHOTS, "1_review.png"))
 
-    # hide the lead's notes
-    win._author_toggled("lead", False)
-    pump(0.2)
+    # --- visibility toggles (view-only: the playlist must not change) ---
+    from blendsketch.playlist import canonical
+    prefs.author = "dana"
+    win.canvas.author = "dana"
+    win.save()
+    before = canonical(win.pl.data)
+
+    # hide all of the lead's strokes: their comment stays
+    win._author_toggled("lead", "strokes", False)
     assert all(s["author"] != "lead" for s in win.canvas.strokes)
-    win.grab().save(os.path.join(SHOTS, "2_lead_hidden.png"))
-    win._author_toggled("lead", True)
+    assert any(c["author"] == "lead" for c in win._visible_comments()), "lead's comment still shown"
+    win._author_toggled("lead", "comments", False)
+    assert all(c["author"] != "lead" for c in win._visible_comments())
+    win._author_toggled("lead", "comments", True)
+    win._author_toggled("lead", "strokes", True)
+
+    # hide one individual stroke of someone else's through the This frame list
+    lst = win.frame_panel.list
+    lead_row = next(lst.item(i) for i in range(lst.count()) if "lead" in lst.item(i).text())
+    lead_row.setCheckState(Qt.CheckState.Unchecked)
+    pump(0.1)
+    assert all(s["author"] != "lead" for s in win.canvas.strokes), "lead's ellipse hidden"
+    assert len(win.canvas.strokes) == 3
+    win.grab().save(os.path.join(SHOTS, "2_stroke_hidden.png"))
+
+    # hide one of dana's own strokes; "Clear mine" must leave hidden and others' strokes alone
+    arrow = next(s for s in win.canvas.strokes if s["kind"] == "arrow")
+    win._stroke_toggled(arrow["id"], False)
+    assert canonical(win.pl.data) == before, "toggling never changes the playlist"
+    assert win.prefs.view_state(win.pl.data["id"])["strokes"], "hidden state remembered on this machine"
+    win.clear_mine()
+    live = Playlist.live(win._item()["strokes"])
+    assert {s["author"] for s in live} == {"dana", "lead"} and len(live) == 2, "only dana's visible brushes cleared"
+    win.undo()
+    win._show_all_on_frame()
+    assert len(win.canvas.strokes) == 4, "Show all brings both back"
 
     # eraser only removes your own marks
     prefs.author = "dana"

@@ -24,6 +24,7 @@ from .strokes import MAIN_BLENDS
 from .timeline import Timeline
 from .widgets import BlendPanel, BrushPanel, ColorPanel, section_label
 
+HIDDEN_MARK = "#4a5060"
 MEDIA_FILTER = "Footage (*.mov *.mp4 *.m4v *.mxf *.mkv *.avi *.webm *.png *.jpg *.jpeg *.tif *.tiff *.exr *.dpx);;All files (*)"
 PLAYLIST_FILTER = f"BlendSketch playlist (*{EXT})"
 TOOLS = [("pen", "Pen", "P"), ("brush", "Soft brush: best for Multiply shading and Screen glows", "B"),
@@ -71,11 +72,15 @@ class MainWindow(QMainWindow):
         self.resolved: dict[str, str | None] = {}
         self.infos: dict[str, dict] = {}
         self.last_frame: dict[str, int] = {}
-        self.hidden_authors: set[str] = set()
+        # What this machine hides. View-only: never written to the playlist.
+        self.hidden_stroke_authors: set[str] = set()
+        self.hidden_comment_authors: set[str] = set()
+        self.hidden_strokes: set[str] = set()
         self.undo_stack: list = []
         self.redo_stack: list = []
         self.dirty = False
-        self.by_frame: dict[int, list] = {}
+        self.by_frame: dict[int, list] = {}      # visible strokes
+        self.all_by_frame: dict[int, list] = {}  # every live stroke, hidden or not
         self.player = Player(prefs.cache_mb)
         self._build_ui()
         self._build_menus()
@@ -393,6 +398,8 @@ class MainWindow(QMainWindow):
         self.brush.fillChanged.connect(lambda v: self.settings.__setitem__("fill", v))
         self.authors.visibilityChanged.connect(self._author_toggled)
         self.frame_panel.clearRequested.connect(self.clear_mine)
+        self.frame_panel.strokeToggled.connect(self._stroke_toggled)
+        self.frame_panel.showAllRequested.connect(self._show_all_on_frame)
         self.comments.addRequested.connect(self.add_comment)
         self.comments.deleteRequested.connect(self.delete_comment)
         self.comments.jumpRequested.connect(self.goto)
@@ -536,7 +543,10 @@ class MainWindow(QMainWindow):
         self.pl = pl
         self.cur = None
         self.undo_stack, self.redo_stack = [], []
-        self.hidden_authors = set()
+        view = self.prefs.view_state(pl.data["id"])
+        self.hidden_stroke_authors = set(view.get("stroke_authors", []))
+        self.hidden_comment_authors = set(view.get("comment_authors", []))
+        self.hidden_strokes = set(view.get("strokes", []))
         self.prefs.push_file(pl.path)
         self.playlist_panel.setEnabled(True)
         self.playlist_panel.set_playlist(pl.name, pl.path)
@@ -789,7 +799,7 @@ class MainWindow(QMainWindow):
     def jump_mark(self, d: int):
         if not self.player.info:
             return
-        frames = sorted(set(self.by_frame) | {c["frame"] for c in self._visible_comments()})
+        frames = sorted(set(self.all_by_frame) | {c["frame"] for c in self._visible_comments()})
         f = self.player.frame
         target = next((x for x in frames if x > f), None) if d > 0 else next((x for x in reversed(frames) if x < f), None)
         if target is not None:
@@ -805,37 +815,79 @@ class MainWindow(QMainWindow):
         it = self._item()
         if not it:
             return []
-        return [c for c in Playlist.live(it["comments"]) if c["author"] not in self.hidden_authors]
+        return [c for c in Playlist.live(it["comments"]) if c["author"] not in self.hidden_comment_authors]
+
+    def _stroke_visible(self, st: dict) -> bool:
+        return st["author"] not in self.hidden_stroke_authors and st["id"] not in self.hidden_strokes
 
     def _refresh_notes(self):
         it = self._item()
-        self.by_frame = {}
+        self.by_frame, self.all_by_frame = {}, {}
         marks: dict[int, list[str]] = {}
         if it:
-            for s in sorted(Playlist.live(it["strokes"]), key=lambda s: s["created"]):
-                if s["author"] in self.hidden_authors:
+            for st in sorted(Playlist.live(it["strokes"]), key=lambda x: x["created"]):
+                self.all_by_frame.setdefault(st["frame"], []).append(st)
+                if not self._stroke_visible(st):
                     continue
-                self.by_frame.setdefault(s["frame"], []).append(s)
-                cols = marks.setdefault(s["frame"], [])
-                c = author_color(s["author"])
+                self.by_frame.setdefault(st["frame"], []).append(st)
+                cols = marks.setdefault(st["frame"], [])
+                c = author_color(st["author"])
                 if c not in cols:
                     cols.append(c)
+            for f in self.all_by_frame:
+                marks.setdefault(f, [HIDDEN_MARK])  # frames whose strokes are all hidden show a grey mark
         self.timeline.set_marks(marks, {c["frame"] for c in self._visible_comments()})
         self.canvas.author = self.prefs.author
         self.canvas.set_strokes(self._strokes_at(self.player.frame))
-        self.authors.set_authors(self.pl.authors() if self.pl else {}, self.hidden_authors, self.prefs.author)
+        self.authors.set_authors(self._author_counts(), self.hidden_stroke_authors, self.hidden_comment_authors, self.prefs.author)
         self._refresh_frame_panels()
         self.a_undo.setEnabled(bool(self.undo_stack))
         self.a_redo.setEnabled(bool(self.redo_stack))
 
+    def _author_counts(self) -> dict[str, tuple[int, int]]:
+        """Everyone with notes anywhere in the playlist, with their counts on the current clip."""
+        counts: dict[str, list[int]] = {name: [0, 0] for name in (self.pl.authors() if self.pl else {})}
+        it = self._item()
+        if it:
+            for k, kind in enumerate(("strokes", "comments")):
+                for r in Playlist.live(it[kind]):
+                    counts.setdefault(r["author"], [0, 0])[k] += 1
+        return {n: (a, b) for n, (a, b) in counts.items()}
+
     def _refresh_frame_panels(self):
         f = self.player.frame if self.player.info else 0
-        self.frame_panel.set_frame(f, self._strokes_at(f), self.prefs.author)
+        self.frame_panel.set_frame(f, self.all_by_frame.get(f, []), self.hidden_strokes, self.hidden_stroke_authors, self.prefs.author)
         self.comments.set_comments(self._visible_comments(), f, self.prefs.author, self._tc)
 
-    def _author_toggled(self, name, on):
-        (self.hidden_authors.discard if on else self.hidden_authors.add)(name)
+    def _author_toggled(self, name: str, kind: str, on: bool):
+        target = self.hidden_stroke_authors if kind == "strokes" else self.hidden_comment_authors
+        (target.discard if on else target.add)(name)
+        self._save_view()
         self._refresh_notes()
+
+    def _stroke_toggled(self, sid: str, on: bool):
+        (self.hidden_strokes.discard if on else self.hidden_strokes.add)(sid)
+        self._save_view()
+        self._refresh_notes()
+
+    def _show_all_on_frame(self):
+        for st in self.all_by_frame.get(self.player.frame, []):
+            self.hidden_strokes.discard(st["id"])
+        self._save_view()
+        self._refresh_notes()
+
+    def _save_view(self):
+        if not self.pl:
+            return
+        live = set()
+        for it in self.pl.items():
+            live |= {st["id"] for st in Playlist.live(it["strokes"])}
+        self.hidden_strokes &= live  # forget strokes that have since been deleted
+        self.prefs.set_view_state(self.pl.data["id"], {
+            "stroke_authors": sorted(self.hidden_stroke_authors),
+            "comment_authors": sorted(self.hidden_comment_authors),
+            "strokes": sorted(self.hidden_strokes),
+        })
 
     def _record_changes(self, changes):
         """changes: list of (kind, before, after) on the current item; applied and made undoable."""
@@ -853,6 +905,12 @@ class MainWindow(QMainWindow):
             return
         self._record_changes([("strokes", None, s)])
         self.color.render_recents(self.prefs.push_color(s["color"]))
+        if s["author"] in self.hidden_stroke_authors:
+            # Drawing while your own strokes are hidden would look like nothing happened.
+            self.hidden_stroke_authors.discard(s["author"])
+            self._save_view()
+            self._refresh_notes()
+            self.status.showMessage("Your strokes were hidden; showing them again", 3000)
 
     def erase_strokes(self, ids: list[str]):
         it = self._item()

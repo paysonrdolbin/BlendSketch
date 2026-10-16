@@ -94,6 +94,13 @@ class Prefs:
     def forget_file(self, path: str):
         self._set("recent_files", [p for p in self.recent_files if p != path])
 
+    def view_state(self, playlist_id: str) -> dict:
+        """What this machine hides in a playlist (authors' strokes/comments, single strokes)."""
+        return self._get(f"view/{playlist_id}", {})
+
+    def set_view_state(self, playlist_id: str, state: dict):
+        self._set(f"view/{playlist_id}", state)
+
     def geometry(self):
         return self.s.value("geometry")
 
