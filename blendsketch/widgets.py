@@ -446,7 +446,8 @@ class BrushPanel(QWidget):
         grid.addWidget(QLabel("Size"), 0, 0)
         grid.addWidget(self.size, 0, 1)
         grid.addWidget(self.size_val, 0, 2)
-        grid.addWidget(QLabel("Opacity"), 1, 0)
+        self.op_label = QLabel("Opacity")
+        grid.addWidget(self.op_label, 1, 0)
         grid.addWidget(self.opacity, 1, 1)
         grid.addWidget(self.op_val, 1, 2)
         checks = QHBoxLayout()
@@ -458,6 +459,10 @@ class BrushPanel(QWidget):
         checks.addWidget(self.fill)
         checks.addStretch(1)
         grid.addLayout(checks, 2, 0, 1, 3)
+
+    def set_strength_label(self, smudge: bool):
+        """The smudge tool uses the opacity slider as its strength."""
+        self.op_label.setText("Strength" if smudge else "Opacity")
 
     def set_values(self, size: int, opacity: float, pressure: bool, fill: bool):
         for w in (self.size, self.opacity, self.pressure, self.fill):

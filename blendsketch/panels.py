@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
-    QToolButton, QTreeWidget, QTreeWidgetItem, QMenu, QVBoxLayout, QWidget,
+    QStyle, QStyleOptionViewItem, QToolButton, QTreeWidget, QTreeWidgetItem, QMenu, QVBoxLayout, QWidget,
 )
 
 from .colors import author_color
@@ -346,6 +346,48 @@ class NotesTree(QTreeWidget):
                 if top.child(k).data(0, MINE_ROLE):
                     mine.add(top.child(k).data(0, ID_ROLE))
         return [i for i in self._selected_ids() if i in mine]
+
+    def _on_checkbox(self, it, pos) -> bool:
+        if not it.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+            return False
+        opt = QStyleOptionViewItem()
+        self.initViewItemOption(opt)
+        opt.rect = self.visualItemRect(it)
+        opt.features |= QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
+        box = self.style().subElementRect(QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, self)
+        return box.adjusted(-3, -3, 3, 3).contains(pos)
+
+    def mousePressEvent(self, e):
+        """Clicking the checkbox of a selected row flips every selected row, without changing the selection."""
+        pos = e.position().toPoint()
+        it = self.itemAt(pos)
+        if it is not None and e.button() == Qt.MouseButton.LeftButton and self._on_checkbox(it, pos):
+            on = it.checkState(0) != Qt.CheckState.Checked
+            if it.data(0, AUTHOR_ROLE):
+                name = it.data(0, AUTHOR_ROLE)
+                QTimer.singleShot(0, lambda: self.authorToggled.emit(name, on))
+            elif it.data(0, ID_ROLE):
+                ids = self._selected_ids() if it.isSelected() else [it.data(0, ID_ROLE)]
+                QTimer.singleShot(0, lambda: self.itemToggled.emit(ids, on))
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        pos = e.position().toPoint()
+        it = self.itemAt(pos)
+        if it is not None and e.button() == Qt.MouseButton.LeftButton and self._on_checkbox(it, pos):
+            e.accept()  # already handled on press; don't let Qt toggle it a second time
+            return
+        super().mouseReleaseEvent(e)
+
+    def mouseDoubleClickEvent(self, e):
+        pos = e.position().toPoint()
+        it = self.itemAt(pos)
+        if it is not None and self._on_checkbox(it, pos):
+            self.mousePressEvent(e)  # treat a fast second click as another toggle
+            return
+        super().mouseDoubleClickEvent(e)
 
     def keyPressEvent(self, e):
         if e.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.selectedItems():

@@ -13,7 +13,7 @@ from .colors import to_hex
 
 PAINT_TOOLS = ("pen", "brush")
 SHAPE_TOOLS = ("line", "arrow", "rect", "ellipse")
-RING_TOOLS = ("pen", "brush", "eraser")
+RING_TOOLS = ("pen", "brush", "smudge", "eraser")
 
 
 class Canvas(QWidget):
@@ -45,6 +45,8 @@ class Canvas(QWidget):
         self.live: dict | None = None
         self._live_layer: QImage | None = None
         self._brush_state = {}
+        self._smudge_img: QImage | None = None
+        self._smudger = None
         self._erasing: set | None = None
         self._panning = None
         self._space = False
@@ -173,6 +175,8 @@ class Canvas(QWidget):
             self._comp = None
         if self.live is None:
             return self._base
+        if self.live["kind"] == "smudge":
+            return self._smudge_img
         if self._comp is None:
             out = self._base.copy()
             if self.live["kind"] in PAINT_TOOLS and self._live_layer is not None:
@@ -327,6 +331,15 @@ class Canvas(QWidget):
             return
         st = dict(self.settings)
         st["size"] = self.settings["sizes"][tool]
+        if tool == "smudge":
+            base = self.composite_image()
+            self.live = S.make_stroke(tool, self.frame_index, self.author, st, pt)
+            self.live["blend"] = "normal"
+            self._smudge_img = base.copy()
+            self._smudger = S.Smudger(self._smudge_img, self.live, self._img_scale())
+            self._smudger.advance()
+            self.update()
+            return
         self.live = S.make_stroke(tool, self.frame_index, self.author, st, pt)
         if tool in PAINT_TOOLS:
             k = self._img_scale()
@@ -369,6 +382,13 @@ class Canvas(QWidget):
             return
         x, y = self.to_src(pos)
         s = self.live
+        if s["kind"] == "smudge":
+            last = s["pts"][-1]
+            if math.hypot(x - last[0], y - last[1]) >= 0.75 / max(self._scale(), 0.01):
+                s["pts"].append([x, y, pressure])
+                self._smudger.advance()
+                self.update()
+            return
         if s["kind"] in PAINT_TOOLS:
             last = s["pts"][-1]
             if math.hypot(x - last[0], y - last[1]) < 0.75 / max(self._scale(), 0.01):
@@ -419,8 +439,12 @@ class Canvas(QWidget):
             return
         self.live = None
         self._live_layer = None
+        self._smudge_img = None
+        self._smudger = None
         self._comp = None
-        if s["kind"] not in PAINT_TOOLS and math.hypot(s["pts"][0][0] - s["pts"][1][0], s["pts"][0][1] - s["pts"][1][1]) < 3:
+        if s["kind"] == "smudge":
+            self._base = None  # rebuilt with the smudge in its place in the stack
+        if s["kind"] not in PAINT_TOOLS + ("smudge",) and math.hypot(s["pts"][0][0] - s["pts"][1][0], s["pts"][0][1] - s["pts"][1][1]) < 3:
             self.update()
             return
         self.strokeCommitted.emit(S.tidy(s))

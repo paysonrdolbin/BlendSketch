@@ -20,8 +20,11 @@ QMainWindow, QWidget {{ background: {BG}; color: {FG}; }}
 QSplitter::handle {{ background: {BG}; width: 1px; }}
 QStatusBar {{ background: {PANEL}; border-top: 1px solid {LINE}; color: {MUTED}; }}
 QMenuBar {{ background: {PANEL}; }}
-QMenu {{ background: {PANEL}; border: 1px solid {LINE}; }}
-QMenu::item:selected {{ background: {RAISE}; }}
+QMenu, #Inspector QMenu {{ background: {PANEL}; border: 1px solid {LINE}; border-radius: 6px; padding: 4px; }}
+QMenu::item {{ background: transparent; color: {FG}; padding: 5px 18px 5px 12px; border-radius: 4px; }}
+QMenu::item:selected {{ background: {ACCENT}; color: {INK}; }}
+QMenu::item:disabled {{ color: #5b6170; background: transparent; }}
+QMenu::separator {{ height: 1px; background: {LINE}; margin: 4px 6px; }}
 QToolTip {{ background: {FG}; color: {BG}; border: 0; padding: 4px 6px; }}
 
 #Rail, #Transport {{ background: {PANEL}; border: 1px solid {LINE}; border-radius: 8px; }}
@@ -75,14 +78,10 @@ QListWidget::item:selected {{ background: {RAISE}; color: {FG}; border: 1px soli
 QTreeWidget#NotesTree {{ background: {WELL}; border: 1px solid {LINE}; border-radius: 6px; padding: 2px; outline: 0; font-size: 12px; }}
 QTreeWidget#NotesTree::item {{ padding: 3px 2px; border-radius: 4px; }}
 QTreeWidget#NotesTree::item:selected {{ background: {RAISE}; color: {FG}; border: 1px solid {ACCENT}; }}
-QTreeWidget#NotesTree::indicator {{ width: 13px; height: 13px; border: 1px solid {LINE}; border-radius: 3px; background: {WELL}; }}
-QTreeWidget#NotesTree::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
 
 QSlider::groove:horizontal {{ height: 4px; background: {LINE}; border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 2px; }}
 QSlider::handle:horizontal {{ background: {FG}; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }}
-QCheckBox::indicator {{ width: 14px; height: 14px; border: 1px solid {LINE}; border-radius: 3px; background: {WELL}; }}
-QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
 
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
 QScrollBar::handle:vertical {{ background: {LINE}; border-radius: 4px; min-height: 30px; margin: 2px; }}
@@ -100,6 +99,18 @@ QScrollBar:horizontal {{ height: 0; }}
 #Comment QLabel, #CommentHere QLabel {{ background: transparent; }}
 #WelcomeTitle {{ font-size: 34px; font-weight: 700; }}
 """
+
+
+def checkbox_style() -> str:
+    """Checkboxes with a real check mark (drawn once to PNGs, since stylesheets can't draw one)."""
+    from .icons import checkbox_images
+    on, off = checkbox_images()
+    rules = []
+    for sel in ("QCheckBox::indicator", "QTreeWidget#NotesTree::indicator"):
+        rules.append(f"{sel} {{ width: 14px; height: 14px; }}")
+        rules.append(f"{sel}:unchecked {{ image: url({off}); }}")
+        rules.append(f"{sel}:checked {{ image: url({on}); }}")
+    return "\n" + "\n".join(rules)
 
 
 class App(QApplication):
@@ -181,7 +192,7 @@ def main():
     f = QFont()
     f.setPointSize(13 if sys.platform == "darwin" else 10)
     app.setFont(f)
-    app.setStyleSheet(STYLE)
+    app.setStyleSheet(STYLE + checkbox_style())
 
     from .prefs import Prefs
     from .window import MainWindow

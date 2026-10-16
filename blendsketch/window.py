@@ -28,6 +28,7 @@ HIDDEN_MARK = "#4a5060"
 MEDIA_FILTER = "Footage (*.mov *.mp4 *.m4v *.mxf *.mkv *.avi *.webm *.png *.jpg *.jpeg *.tif *.tiff *.exr *.dpx);;All files (*)"
 PLAYLIST_FILTER = f"BlendSketch playlist (*{EXT})"
 TOOLS = [("pen", "Pen", "P"), ("brush", "Soft brush: best for Multiply shading and Screen glows", "B"),
+         ("smudge", "Smudge: drag the pixels under the brush", "S"),
          ("line", "Line", "L"), ("arrow", "Arrow", "A"), ("rect", "Rectangle", "R"), ("ellipse", "Ellipse", "O"),
          ("text", "Text", "T"), ("eraser", "Eraser: removes your own marks", "E"), ("picker", "Eyedropper (or hold Alt/Option)", "I")]
 
@@ -63,7 +64,7 @@ class MainWindow(QMainWindow):
         self.prefs = prefs
         self.settings = {
             "tool": "brush", "color": "#6f7fb8", "blend": "multiply", "opacity": 0.8, "pressure": True, "fill": False,
-            "sizes": {"pen": 6, "brush": 80, "line": 5, "arrow": 5, "rect": 5, "ellipse": 5, "text": 8, "eraser": 30},
+            "sizes": {"pen": 6, "brush": 80, "smudge": 60, "line": 5, "arrow": 5, "rect": 5, "ellipse": 5, "text": 8, "eraser": 30},
         }
         self.prev_tool = "brush"
         self.temp_pick = False
@@ -142,7 +143,7 @@ class MainWindow(QMainWindow):
             group.addButton(b)
             rl.addWidget(b)
             self.tool_buttons[key] = b
-            if key in ("brush", "text", "eraser"):
+            if key in ("smudge", "text", "eraser"):
                 sep = QWidget()
                 sep.setFixedHeight(1)
                 sep.setObjectName("RailSep")
@@ -436,6 +437,7 @@ class MainWindow(QMainWindow):
         self.color.pick_btn.setChecked(key == "picker")
         self.color.pick_btn.blockSignals(False)
         cursors = {"text": Qt.CursorShape.IBeamCursor, "pen": Qt.CursorShape.BlankCursor, "brush": Qt.CursorShape.BlankCursor,
+                   "smudge": Qt.CursorShape.BlankCursor,
                    "eraser": Qt.CursorShape.BlankCursor}
         self.canvas.setCursor(cursors.get(key, Qt.CursorShape.CrossCursor))
         self.canvas.refresh_pick()
@@ -457,6 +459,7 @@ class MainWindow(QMainWindow):
 
     def _update_brush_ui(self):
         t = self._size_tool()
+        self.brush.set_strength_label(t == "smudge")
         self.brush.set_values(self.settings["sizes"][t], self.settings["opacity"], self.settings["pressure"], self.settings["fill"])
         self.blend.set_preview(self.settings["color"], self.settings["opacity"])
 
@@ -862,6 +865,8 @@ class MainWindow(QMainWindow):
 
     def _stroke_label(self, st: dict) -> str:
         label = TOOL_LABELS.get(st["kind"], st["kind"])
+        if st["kind"] == "smudge":
+            return f"{label}   Strength {round(st['opacity'] * 100)}%"
         if st["kind"] == "text":
             label += f" \u201c{st.get('text', '')[:18]}\u201d"
         return f"{label}   {BLENDS.get(st['blend'], ('?',))[0]} {round(st['opacity'] * 100)}%"
@@ -951,7 +956,8 @@ class MainWindow(QMainWindow):
         if not self._item():
             return
         self._record_changes([("strokes", None, s)])
-        self.color.render_recents(self.prefs.push_color(s["color"]))
+        if s["kind"] != "smudge":  # a smudge carries no color of its own
+            self.color.render_recents(self.prefs.push_color(s["color"]))
         if s["author"] in self.hidden_stroke_authors:
             # Drawing while your own strokes are hidden would look like nothing happened.
             self.hidden_stroke_authors.discard(s["author"])

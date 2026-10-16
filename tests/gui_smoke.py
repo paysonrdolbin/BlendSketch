@@ -16,7 +16,7 @@ os.environ["BLENDSKETCH_SETTINGS"] = os.path.join(tempfile.mkdtemp(), "prefs.ini
 from PySide6.QtCore import QPointF, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from blendsketch.app import App, STYLE  # noqa: E402
+from blendsketch.app import App, STYLE, checkbox_style  # noqa: E402
 from blendsketch.playlist import Playlist  # noqa: E402
 from blendsketch.prefs import Prefs  # noqa: E402
 from blendsketch.window import MainWindow  # noqa: E402
@@ -54,7 +54,7 @@ def drag(win, pts, pressure=1.0):
 def main():
     app = App(sys.argv[:1])
     app.setStyle("Fusion")
-    app.setStyleSheet(STYLE)
+    app.setStyleSheet(STYLE + checkbox_style())
     prefs = Prefs()
     prefs.author = "dana"
     win = MainWindow(prefs)
@@ -149,6 +149,36 @@ def main():
     win.undo()
     assert len(Playlist.live(win._item()["strokes"])) == 4, "undo restores both"
 
+    # clicking the checkbox of one of several selected rows toggles all of them
+    from PySide6.QtTest import QTest
+    tree.clearSelection()
+    d = top(tree, "dana")
+    rows = [d.child(0), d.child(1)]
+    for c in rows:
+        c.setSelected(True)
+    rect = tree.visualItemRect(rows[1])
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+    opt = QStyleOptionViewItem()
+    tree.initViewItemOption(opt)
+    opt.rect = rect
+    opt.features |= QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
+    box = tree.style().subElementRect(QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, tree)
+    QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, box.center())
+    pump(0.1)
+    assert len(win.canvas.strokes) == 2, f"both selected strokes hidden, {len(win.canvas.strokes)} visible"
+    d = top(tree, "dana")
+    assert [d.child(k).checkState(0) for k in range(2)] == [Qt.CheckState.Unchecked] * 2
+    assert len(tree.selectedItems()) == 2, "selection kept"
+    QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, box.center())
+    pump(0.1)
+    assert len(win.canvas.strokes) == 4, "and shown again"
+
+    # right-click menu is opaque
+    from PySide6.QtWidgets import QMenu
+    m = QMenu(tree)
+    m.addAction("Hide 2 strokes")
+    assert m.palette() is not None and "QMenu" in QApplication.instance().styleSheet()
+
     # deleting your own comment through the comments tree
     ct = win.comment_tree
     mine = top(ct, "dana").child(0)
@@ -170,6 +200,21 @@ def main():
     assert len(Playlist.live(win._item()["strokes"])) == 3, "dana's arrow erased"
     win.undo()
     assert len(Playlist.live(win._item()["strokes"])) == 4, "undo restores it"
+
+    # smudge drags pixels: sample a point across the red/green bar edge before and after
+    win.set_tool("smudge")
+    win.settings["opacity"] = 0.9
+    c = win.canvas
+    before_px = c.composite_image().pixelColor(int(470 * c._img_scale()), int(100 * c._img_scale()))
+    drag(win, [(250 + i * 10, 100, 1) for i in range(30)])  # from red into green, near the top
+    pump(0.2)
+    after_px = c.composite_image().pixelColor(int(470 * c._img_scale()), int(100 * c._img_scale()))
+    smudges = [s for s in Playlist.live(win._item()["strokes"]) if s["kind"] == "smudge"]
+    assert len(smudges) == 1, "smudge saved as a stroke"
+    assert after_px.red() > before_px.red() + 40, f"red dragged into green: {before_px.name()} -> {after_px.name()}"
+    win.grab().save(os.path.join(SHOTS, "2c_smudge.png"))
+    win.undo()
+    win.set_tool("brush")
 
     # eyedropper readout
     win.set_tool("picker")

@@ -1,6 +1,8 @@
 # BlendSketch
 
-Frame-accurate review for footage, with drawing tools that blend (Multiply, Screen, Overlay and ten more) and shared playlist files.
+Frame-accurate review for footage, with drawing tools that blend (Multiply, Screen, Overlay and ten more), a Procreate-style smudge brush, and shared playlist files.
+
+The **smudge** tool (S) picks up the pixels under the brush and drags them along; the opacity slider becomes its strength, and pen pressure scales it. A smudge is stored like any other stroke, so it can be hidden, deleted and undone, and it smears whatever is beneath it (the frame and earlier marks).
 
 - **Plays ProRes directly.** FFmpeg (through PyAV) is built in, so ProRes 422/4444, DNxHR, H.264 (including 10-bit and 4:2:2), HEVC, image sequences' single frames and most other formats play with no proxies or conversion.
 - **Playlists are files.** A `.bsplaylist` holds the clip list plus every stroke and comment. Footage is referenced by path, not copied in, so the file stays small (kilobytes).
@@ -64,13 +66,13 @@ The inspector lists the current frame's **Strokes** and **Comments**, grouped by
 ```
 
 - A person's checkbox shows or hides everything they've made, on every frame, including notes they add later. The item checkboxes underneath show or hide single notes. Hiding is saved per playlist on your machine and never changes the file, so you can hide anyone's notes.
-- Select notes (Shift- or ⌘/Ctrl-click for several) and press Delete/Backspace, or right-click ▸ Delete. Only your own notes are deleted; other people's are skipped and can only be hidden. ⌘/Ctrl+Z undoes a delete. The eraser and Edit ▸ Clear My Marks follow the same rule.
+- Select notes (Shift- or ⌘/Ctrl-click for several). Clicking the checkbox of any selected row shows or hides all of them. Press Delete/Backspace, or right-click ▸ Delete. Only your own notes are deleted; other people's are skipped and can only be hidden. ⌘/Ctrl+Z undoes a delete. The eraser and Edit ▸ Clear My Marks follow the same rule.
 
 ## Shortcuts
 
 | Key | Action | Key | Action |
 | --- | --- | --- | --- |
-| P B L A R O T E | Pen, brush, line, arrow, rect, ellipse, text, eraser | Space | Play / pause |
+| P B S L A R O T E | Pen, brush, smudge, line, arrow, rect, ellipse, text, eraser | Space | Play / pause |
 | I, or hold Alt/Option | Eyedropper | ← → | Previous / next frame |
 | 1 2 3 | Normal, Multiply, Screen | Shift+← → | Previous / next noted frame |
 | [ ] | Brush size | ↑ ↓ | Previous / next clip |

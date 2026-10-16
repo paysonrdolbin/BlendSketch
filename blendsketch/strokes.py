@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QRadialGradient
 
@@ -33,7 +35,8 @@ BLENDS = {
     "exclusion": ("Exclusion", CM.CompositionMode_Exclusion),
 }
 MAIN_BLENDS = ("normal", "multiply", "screen")
-TOOL_LABELS = {"pen": "Pen", "brush": "Brush", "line": "Line", "arrow": "Arrow", "rect": "Rect", "ellipse": "Ellipse", "text": "Text"}
+TOOL_LABELS = {"pen": "Pen", "brush": "Brush", "smudge": "Smudge", "line": "Line", "arrow": "Arrow", "rect": "Rect",
+               "ellipse": "Ellipse", "text": "Text"}
 TEXT_FAMILY = "Helvetica Neue"
 
 
@@ -282,6 +285,12 @@ def composite(target: QImage, strokes, scale: float, cache: RasterCache):
     """Blend each stroke onto target (an image at `scale` x source resolution)."""
     g = QPainter(target)
     for s in strokes:
+        if s["kind"] == "smudge":
+            # A smudge reworks the pixels already there, so it runs in order on the target itself.
+            g.end()
+            Smudger(target, s, scale).run()
+            g = QPainter(target)
+            continue
         hit = cache.get(s, scale)
         if hit is None:
             continue
@@ -313,7 +322,7 @@ def hit(s: dict, x: float, y: float, r: float) -> bool:
         return math.hypot(x - a[0] - t * dx, y - a[1] - t * dy)
 
     k = s["kind"]
-    if k in ("pen", "brush"):
+    if k in ("pen", "brush", "smudge"):
         if len(P) == 1:
             return math.hypot(x - P[0][0], y - P[0][1]) < tol
         return any(seg_d(P[i - 1], P[i]) < tol for i in range(1, len(P)))
@@ -335,3 +344,78 @@ def hit(s: dict, x: float, y: float, r: float) -> bool:
     if k == "text":
         return bbox(s).adjusted(-r, -r, r, r).contains(QPointF(x, y))
     return False
+
+
+# ---------------------------------------------------------------- smudge
+
+def image_array(img: QImage) -> np.ndarray:
+    """A writable H x W x 4 uint8 view of a 32-bit QImage's pixels."""
+    h, w, bpl = img.height(), img.width(), img.bytesPerLine()
+    buf = np.frombuffer(img.bits(), np.uint8, count=h * bpl)
+    return buf.reshape(h, bpl)[:, : w * 4].reshape(h, w, 4)
+
+
+class Smudger:
+    """Procreate-style smudge: the brush picks up the pixels under it and drags them along.
+
+    Each dab blends the paint it's carrying into the image under a soft round mask, then
+    carries the result forward, so the smear fades out over the length of the stroke.
+    Strength comes from the stroke's opacity, scaled by pen pressure.
+    Works in premultiplied ARGB, which is what keeps edges from going dark.
+    """
+
+    def __init__(self, img: QImage, s: dict, scale: float):
+        self.img, self.s, self.scale = img, s, scale
+        self.arr = image_array(img)
+        self.r = max(1.0, s["size"] * scale / 2)
+        R = self.R = int(math.ceil(self.r))
+        yy, xx = np.mgrid[-R:R + 1, -R:R + 1]
+        d2 = (xx * xx + yy * yy) / (self.r * self.r)
+        self.mask = np.clip(1 - d2, 0, 1) ** 2  # soft edge
+        self.carry = None
+        self.next = 0.0
+        self.done = 0  # points consumed
+
+    def _dab(self, cx: float, cy: float, p: float):
+        R, D = self.R, 2 * self.R + 1
+        H, W = self.arr.shape[:2]
+        x0, y0 = int(round(cx)) - R, int(round(cy)) - R
+        sx, sy = max(0, -x0), max(0, -y0)
+        ex, ey = min(D, W - x0), min(D, H - y0)
+        if ex <= sx or ey <= sy:
+            return
+        region = self.arr[y0 + sy:y0 + ey, x0 + sx:x0 + ex]
+        tgt = region.astype(np.float32)
+        if self.carry is None:
+            self.carry = np.zeros((D, D, 4), np.float32)
+            self.carry[sy:ey, sx:ex] = tgt
+            return
+        k = (0.3 + 0.7 * p) if self.s["pressure"] else 1.0
+        a = (self.mask[sy:ey, sx:ex] * self.s["opacity"] * k)[..., None]
+        new = tgt + (self.carry[sy:ey, sx:ex] - tgt) * a
+        region[...] = np.clip(new + 0.5, 0, 255).astype(np.uint8)
+        self.carry[sy:ey, sx:ex] = new
+
+    def advance(self):
+        """Smudge along any points added since the last call."""
+        P = self.s["pts"]
+        k = self.scale
+        step = max(1.0, self.r * 0.18)
+        if self.done == 0 and P:
+            a = P[0]
+            self._dab(a[0] * k, a[1] * k, a[2])
+            self.done = 1
+        while self.done < len(P):
+            a, b = P[self.done - 1], P[self.done]
+            ax, ay, bx, by = a[0] * k, a[1] * k, b[0] * k, b[1] * k
+            d = math.hypot(bx - ax, by - ay)
+            at = self.next
+            while at <= d:
+                t = at / d if d else 0
+                self._dab(ax + (bx - ax) * t, ay + (by - ay) * t, a[2] + (b[2] - a[2]) * t)
+                at += step
+            self.next = at - d
+            self.done += 1
+
+    def run(self):
+        self.advance()

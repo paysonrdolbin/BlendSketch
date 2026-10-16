@@ -12,6 +12,7 @@ _F = 'fill="{c}"'
 PATHS = {
     "pen": (_S, '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>'),
     "brush": (_S, '<path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>'),
+    "smudge": (_S, '<path d="M18 11V6a2 2 0 0 0-4 0v0"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.83L7 15"/>'),
     "line": (_S, '<path d="M5 19 19 5"/>'),
     "arrow": (_S, '<path d="M5 19 19 5"/><path d="M10 5h9v9"/>'),
     "rect": (_S, '<rect x="4" y="6" width="16" height="12" rx="1"/>'),
@@ -70,3 +71,31 @@ def icon(name: str, color: str = FG, checked_color: str = INK) -> QIcon:
         ic.addPixmap(_render(name, "#5b6170"), QIcon.Mode.Disabled, QIcon.State.Off)
         _cache[key] = ic
     return ic
+
+
+def checkbox_images() -> tuple[str, str]:
+    """Write checked/unchecked checkbox PNGs (with @2x versions) and return their paths for stylesheets."""
+    import os
+    import tempfile
+    folder = os.path.join(tempfile.gettempdir(), "blendsketch-ui")
+    os.makedirs(folder, exist_ok=True)
+    box = '<rect x="1" y="1" width="12" height="12" rx="3" fill="{fill}" stroke="{stroke}" stroke-width="1"/>'
+    tick = '<path d="M3.6 7.2 6 9.6l4.6-5" fill="none" stroke="#1b1404" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>'
+    svgs = {
+        "check_on": box.format(fill="#f2b84b", stroke="#f2b84b") + tick,
+        "check_off": box.format(fill="#0b0c10", stroke="#5b6170"),
+    }
+    paths = []
+    for name, body in svgs.items():
+        svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14">{body}</svg>'
+        r = QSvgRenderer(QByteArray(svg.encode()))
+        for scale, suffix in ((1, ""), (2, "@2x")):
+            img = QImage(14 * scale, 14 * scale, QImage.Format.Format_ARGB32_Premultiplied)
+            img.fill(Qt.GlobalColor.transparent)
+            p = QPainter(img)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            r.render(p, QRectF(0, 0, 14 * scale, 14 * scale))
+            p.end()
+            img.save(os.path.join(folder, f"{name}{suffix}.png"))
+        paths.append(os.path.join(folder, f"{name}.png").replace("\\", "/"))
+    return paths[0], paths[1]
