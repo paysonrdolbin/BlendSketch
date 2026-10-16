@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.m.outputs.matrix }}
+      linux: ${{ steps.m.outputs.linux }}
     steps:
       - id: m
         shell: python
@@ -23,16 +24,17 @@ jobs:
           PLATFORM: ${{ inputs.platform || 'all' }}
         run: |
           import json, os
-          all_ = {"macos": {"os": "macos-14", "artifact": "BlendSketch-macOS"},
-                  "windows": {"os": "windows-2022", "artifact": "BlendSketch-Windows"},
-                  "linux": {"os": "ubuntu-22.04", "artifact": "BlendSketch-Linux"}}
+          native = {"macos": {"os": "macos-14", "artifact": "BlendSketch-macOS"},
+                    "windows": {"os": "windows-2022", "artifact": "BlendSketch-Windows"}}
           p = os.environ["PLATFORM"]
-          inc = list(all_.values()) if p == "all" else [all_[p]]
+          inc = list(native.values()) if p == "all" else [native[p]] if p in native else []
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("matrix=" + json.dumps({"include": inc}) + "\n")
+              f.write("linux=" + ("true" if p in ("all", "linux") else "false") + "\n")
 
   build:
     needs: plan
+    if: ${{ fromJSON(needs.plan.outputs.matrix).include[0] }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -42,9 +44,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Linux system libraries for Qt
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libpulse0 ffmpeg
       - name: Install
         run: |
           python -m pip install --upgrade pip
@@ -62,25 +61,72 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python - <<'EOF'
-          import av, fractions, numpy as np
-          c = av.open("check.mov", "w"); s = c.add_stream("prores_ks", rate=24); s.width, s.height, s.pix_fmt = 640, 360, "yuv422p10le"
-          for i in range(24):
-              f = av.VideoFrame.from_ndarray(np.full((360, 640, 3), i * 10, np.uint8), format="rgb24")
-              for p in s.encode(f): c.mux(p)
-          for p in s.encode(): c.mux(p)
-          c.close()
-          EOF
-          if [ "$RUNNER_OS" = "macOS" ]; then BIN=dist/BlendSketch.app/Contents/MacOS/BlendSketch; elif [ "$RUNNER_OS" = "Windows" ]; then BIN=dist/BlendSketch/BlendSketch.exe; else BIN=dist/BlendSketch/BlendSketch; fi
+          python packaging/make_check_clip.py check.mov
+          if [ "$RUNNER_OS" = "macOS" ]; then BIN=dist/BlendSketch.app/Contents/MacOS/BlendSketch; else BIN=dist/BlendSketch/BlendSketch.exe; fi
           "$BIN" --check check.mov
       - name: Package
         shell: bash
         run: |
           cd dist
           if [ "$RUNNER_OS" = "macOS" ]; then ditto -c -k --keepParent BlendSketch.app ../${{ matrix.artifact }}.zip
-          elif [ "$RUNNER_OS" = "Windows" ]; then 7z a ../${{ matrix.artifact }}.zip BlendSketch
-          else tar czf ../${{ matrix.artifact }}.tar.gz BlendSketch; fi
+          else 7z a ../${{ matrix.artifact }}.zip BlendSketch; fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.*
+
+  # Linux is built inside Rocky Linux 9 so the app links against Rocky's own glibc (2.34) and
+  # runs on Rocky/RHEL/Alma 9 and anything newer. A build from a newer distro won't start there.
+  build-linux:
+    needs: plan
+    if: needs.plan.outputs.linux == 'true'
+    runs-on: ubuntu-latest
+    container: rockylinux:9
+    steps:
+      - name: System packages
+        run: |
+          dnf install -y dnf-plugins-core epel-release
+          dnf config-manager --set-enabled crb
+          dnf install -y --setopt=install_weak_deps=False \
+            python3.12 python3.12-pip python3.12-libs binutils tar gzip findutils which git \
+            mesa-libGL mesa-libEGL libglvnd-glx libglvnd-egl libxkbcommon libxkbcommon-x11 fontconfig freetype \
+            dbus-libs glib2 libX11 libXext libXrender libSM libICE libxcb \
+            xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-image xcb-util-renderutil \
+            pulseaudio-libs alsa-lib dejavu-sans-fonts
+      - uses: actions/checkout@v4
+      - name: Python environment
+        run: |
+          python3.12 -m venv /opt/venv
+          echo /opt/venv/bin >> "$GITHUB_PATH"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pytest
+      - name: Tests
+        run: python -m pytest tests/test_playlist.py -q
+      - name: Icons
+        run: python packaging/make_icons.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Build
+        run: pyinstaller --noconfirm BlendSketch.spec
+      - name: Decode check (ProRes)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python packaging/make_check_clip.py check.mov
+          dist/BlendSketch/BlendSketch --check check.mov
+      - name: Report glibc requirement
+        run: |
+          echo "Rocky $(cat /etc/rocky-release)"
+          echo "Highest glibc symbol needed by the bundle:"
+          find dist/BlendSketch -type f \( -name '*.so*' -o -name BlendSketch \) -exec objdump -T {} + 2>/dev/null \
+            | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
+      - name: Package
+        run: |
+          cd dist
+          tar czf ../BlendSketch-Linux-Rocky9.tar.gz BlendSketch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BlendSketch-Linux-Rocky9
+          path: BlendSketch-Linux-Rocky9.tar.gz
