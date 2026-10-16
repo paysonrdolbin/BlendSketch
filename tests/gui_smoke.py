@@ -94,6 +94,17 @@ def main():
     assert len(Playlist.live(item["strokes"])) == 4 and len(Playlist.live(item["comments"])) == 2
     win.grab().save(os.path.join(SHOTS, "1_review.png"))
 
+    # manual saving: nothing is written until you save
+    def disk_strokes():
+        item = Playlist.open(path).item(win.cur)
+        return len(Playlist.live(item["strokes"])) if item else 0
+
+    assert win.dirty and win.isWindowModified(), "unsaved changes are flagged"
+    pump(1.2)
+    assert disk_strokes() == 0, "no autosave: the file still has none of the session's strokes"
+    assert win.save() and not win.dirty and not win.isWindowModified()
+    assert disk_strokes() == 4, "saved on request"
+
     # --- grouped trees: visibility (view-only) and deleting (own only) ---
     from PySide6.QtGui import QKeyEvent
     from PySide6.QtCore import QEvent
@@ -173,11 +184,16 @@ def main():
     pump(0.1)
     assert len(win.canvas.strokes) == 4, "and shown again"
 
-    # right-click menu is opaque
-    from PySide6.QtWidgets import QMenu
-    m = QMenu(tree)
-    m.addAction("Hide 2 strokes")
-    assert m.palette() is not None and "QMenu" in QApplication.instance().styleSheet()
+    # right-click menu has a solid background (it used to inherit the inspector's transparency)
+    from PySide6.QtGui import QColor
+    m = tree.build_menu()
+    m.adjustSize()
+    m.show()
+    pump(0.05)
+    shot = m.grab().toImage()
+    bg = QColor(shot.pixel(shot.width() - 6, shot.height() // 2))
+    m.close()
+    assert bg.alpha() == 255 and bg.name() == "#1a1d24", f"menu background {bg.name()} alpha {bg.alpha()}"
 
     # deleting your own comment through the comments tree
     ct = win.comment_tree
@@ -291,7 +307,18 @@ def main():
     reopened = Playlist.open(path)
     assert reopened.item(third["id"])["media"]["relative"] == "moved/edit_ref.mp4"
     print("size of playlist file:", os.path.getsize(path), "bytes")
+    # quitting with unsaved changes asks first
+    win.add_comment("Unsaved note")
+    assert win.dirty
+    win._ask_save = lambda: "cancel"
     win.close()
+    pump(0.1)
+    assert win.isVisible(), "Cancel keeps the window open"
+    win._ask_save = lambda: "save"
+    win.close()
+    pump(0.1)
+    assert not win.isVisible(), "Save closes"
+    assert any(c["text"] == "Unsaved note" for c in Playlist.live(Playlist.open(path).item(win.cur)["comments"])), "and saves"
     print("ALL OK")
 
 

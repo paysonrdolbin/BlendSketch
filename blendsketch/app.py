@@ -20,11 +20,6 @@ QMainWindow, QWidget {{ background: {BG}; color: {FG}; }}
 QSplitter::handle {{ background: {BG}; width: 1px; }}
 QStatusBar {{ background: {PANEL}; border-top: 1px solid {LINE}; color: {MUTED}; }}
 QMenuBar {{ background: {PANEL}; }}
-QMenu, #Inspector QMenu {{ background: {PANEL}; border: 1px solid {LINE}; border-radius: 6px; padding: 4px; }}
-QMenu::item {{ background: transparent; color: {FG}; padding: 5px 18px 5px 12px; border-radius: 4px; }}
-QMenu::item:selected {{ background: {ACCENT}; color: {INK}; }}
-QMenu::item:disabled {{ color: #5b6170; background: transparent; }}
-QMenu::separator {{ height: 1px; background: {LINE}; margin: 4px 6px; }}
 QToolTip {{ background: {FG}; color: {BG}; border: 0; padding: 4px 6px; }}
 
 #Rail, #Transport {{ background: {PANEL}; border: 1px solid {LINE}; border-radius: 8px; }}
@@ -99,6 +94,14 @@ QScrollBar:horizontal {{ height: 0; }}
 #CommentHere {{ border-color: #8fb3ff; }}
 #Comment QLabel, #CommentHere QLabel {{ background: transparent; }}
 #WelcomeTitle {{ font-size: 34px; font-weight: 700; }}
+
+/* Menus last, so no container rule (like the inspector's transparent background) can override them.
+   Square corners: macOS can only draw rounded menu corners by making the whole menu translucent. */
+QMenu, QWidget QMenu, #Inspector QMenu, QMenu#ContextMenu {{ background-color: {PANEL}; border: 1px solid {LINE}; padding: 4px; }}
+QMenu::item {{ background-color: transparent; color: {FG}; padding: 5px 18px 5px 12px; border-radius: 4px; }}
+QMenu::item:selected {{ background-color: {ACCENT}; color: {INK}; }}
+QMenu::item:disabled {{ color: #5b6170; background-color: transparent; }}
+QMenu::separator {{ height: 1px; background-color: {LINE}; margin: 4px 6px; }}
 """
 
 

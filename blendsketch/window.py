@@ -90,8 +90,6 @@ class MainWindow(QMainWindow):
         self.set_tool("brush")
         self.color.set_hex(self.settings["color"])
         self._update_brush_ui()
-        self.save_timer = QTimer(self, singleShot=True, interval=800)
-        self.save_timer.timeout.connect(self.save)
         self.poll_timer = QTimer(self, interval=2000)
         self.poll_timer.timeout.connect(self._poll)
         self.poll_timer.start()
@@ -522,6 +520,8 @@ class MainWindow(QMainWindow):
             return
         if not path.endswith(EXT):
             path += EXT
+        if not self.maybe_save():  # asked only once a new file is chosen
+            return
         try:
             pl = Playlist.create(path, os.path.splitext(os.path.basename(path))[0], self.prefs.author)
         except PlaylistError as e:
@@ -536,6 +536,8 @@ class MainWindow(QMainWindow):
             self.open_playlist(path)
 
     def open_playlist(self, path: str):
+        if not self.maybe_save():
+            return
         try:
             pl = Playlist.open(path)
         except PlaylistError as e:
@@ -547,12 +549,11 @@ class MainWindow(QMainWindow):
         self._load_playlist(pl)
 
     def _load_playlist(self, pl: Playlist):
-        if self.pl and self.dirty:
-            self.save()
         self.player.unload()
         self.pl = pl
         self.cur = None
         self.undo_stack, self.redo_stack = [], []
+        self.dirty = False
         view = self.prefs.view_state(pl.data["id"])
         self.hidden_stroke_authors = set(view.get("stroke_authors", []))
         self.hidden_comment_authors = set(view.get("comment_authors", []))
@@ -581,8 +582,10 @@ class MainWindow(QMainWindow):
 
     def _update_title(self):
         if self.pl:
-            self.setWindowTitle(f"{self.pl.name}{' •' if self.dirty else ''} — {APP_NAME}")
+            # [*] shows the platform's unsaved-changes marker (a dot in the close button on macOS)
+            self.setWindowTitle(f"{self.pl.name}[*] — {APP_NAME}")
             self.setWindowFilePath(self.pl.path)
+            self.setWindowModified(self.dirty)
         else:
             self.setWindowTitle(APP_NAME)
 
@@ -1021,29 +1024,55 @@ class MainWindow(QMainWindow):
     # ================================================================ saving & merging
 
     def _changed(self, refresh_list=True):
+        """The playlist changed in memory. Nothing is written until you save."""
         self.dirty = True
         self._update_title()
-        self.save_timer.start()
         self._refresh_notes()
         if refresh_list:
             self._refresh_playlist()
 
-    def save(self):
+    def save(self) -> bool:
+        """Write the playlist (merged with the file on disk, so nobody's notes are overwritten)."""
         if not self.pl:
-            return
+            return True
         try:
             incoming = self.pl.save()
         except PlaylistError as e:
-            self.status.showMessage(f"{e} Retrying…", 5000)
-            self.save_timer.start(5000)
-            return
+            QMessageBox.warning(self, "Couldn't save", f"{e}\n\nYour changes are still open here; try saving again.")
+            return False
         self.dirty = False
         self._update_title()
         if incoming:
             self._after_merge()
             self.status.showMessage("Saved, with others' new notes merged in", 3000)
         else:
-            self.status.showMessage("Saved", 1500)
+            self.status.showMessage("Saved", 2000)
+        return True
+
+    def _ask_save(self) -> str:
+        """Ask what to do with unsaved changes: 'save', 'discard' or 'cancel'."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(f"Save changes to \u201c{self.pl.name}\u201d?")
+        box.setInformativeText("Your strokes and comments since the last save will be lost if you don't save.")
+        box.setStandardButtons(QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
+                               | QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Save)
+        choice = box.exec()
+        return {QMessageBox.StandardButton.Save: "save", QMessageBox.StandardButton.Discard: "discard"}.get(
+            QMessageBox.StandardButton(choice), "cancel")
+
+    def maybe_save(self) -> bool:
+        """Before closing or switching playlists. Returns False if the user cancels or saving fails."""
+        if not self.pl or not self.dirty:
+            return True
+        choice = self._ask_save()
+        if choice == "save":
+            return self.save()
+        if choice == "discard":
+            self.dirty = False
+            return True
+        return False
 
     def _poll(self):
         if not self.pl:
@@ -1053,7 +1082,9 @@ class MainWindow(QMainWindow):
             self._after_merge()
             self.status.showMessage("Others' notes updated", 3000)
         if needs_save:
-            self.save_timer.start()
+            # Memory holds notes the file doesn't: keep them until the next save.
+            self.dirty = True
+            self._update_title()
 
     def _after_merge(self):
         for it in self.pl.items():
@@ -1133,8 +1164,9 @@ class MainWindow(QMainWindow):
                 self._refresh_playlist()
 
     def closeEvent(self, e):
-        if self.pl and self.dirty:
-            self.save()
+        if not self.maybe_save():
+            e.ignore()
+            return
         self.player.unload()
         self.prefs.set_geometry(self.saveGeometry())
         super().closeEvent(e)

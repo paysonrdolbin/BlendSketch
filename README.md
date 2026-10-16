@@ -6,7 +6,8 @@ The **smudge** tool (S) picks up the pixels under the brush and drags them along
 
 - **Plays ProRes directly.** FFmpeg (through PyAV) is built in, so ProRes 422/4444, DNxHR, H.264 (including 10-bit and 4:2:2), HEVC, image sequences' single frames and most other formats play with no proxies or conversion.
 - **Playlists are files.** A `.bsplaylist` holds the clip list plus every stroke and comment. Footage is referenced by path, not copied in, so the file stays small (kilobytes).
-- **Shared, merged notes.** Several people can have the same playlist open. Each save merges with what's on disk, and the app picks up others' notes every couple of seconds. Every note carries its author; the Authors panel shows or hides each person's notes.
+- **You choose when to save.** Changes stay in the app until you press ⌘/Ctrl+S (File ▸ Save); the title bar shows when there are unsaved changes, and closing, quitting or opening another playlist asks whether to save first.
+- **Notes are never overwritten.** Each save merges with what's on disk, so if two people do save the same playlist, both sets of notes survive. Every note carries its author, and you can show or hide each person's notes.
 
 ## Running from source
 
@@ -51,7 +52,7 @@ Clips that still can't be found show as **Missing**. Double-click one (or File �
 
 ## Shared editing
 
-Every stroke, comment and clip is a record with an id, an author and a modified time. Deleting writes a tombstone, so a merge can't bring a deleted note back. When two versions of the same record meet, the newer one wins. Saving is automatic (under a second after each change) and atomic (write to a temp file, then rename), so a reader never sees a half-written file.
+Every stroke, comment and clip is a record with an id, an author and a modified time. Deleting writes a tombstone, so a merge can't bring a deleted note back. When two versions of the same record meet, the newer one wins. Saving is manual and atomic (write to a temp file, then rename), so a reader never sees a half-written file.
 
 Your name comes from Preferences (it defaults to your login name).
 
@@ -79,6 +80,7 @@ The inspector lists the current frame's **Strokes** and **Comments**, grouped by
 | H | Show / hide marks | Home / End | First / last frame |
 | F, ⌘/Ctrl+1 | Fit, actual pixels | M | Mute |
 | ⌘/Ctrl+Z, ⇧⌘/Ctrl+Shift+Z | Undo, redo | ⌘/Ctrl+E | Export frame with marks |
+| ⌘/Ctrl+S | Save | | |
 
 Scroll wheel or pinch zooms; trackpad scroll or middle-drag pans. Shift constrains lines to 45° and shapes to squares and circles.
 

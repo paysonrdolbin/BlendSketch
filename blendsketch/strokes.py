@@ -385,6 +385,11 @@ class Smudger:
         if ex <= sx or ey <= sy:
             return
         region = self.arr[y0 + sy:y0 + ey, x0 + sx:x0 + ex]
+        if not region[..., 3].any() and (self.carry is None or not self.carry[sy:ey, sx:ex, 3].any()):
+            # Nothing under the brush and nothing being carried: a dab can't change anything.
+            if self.carry is None:
+                self.carry = np.zeros((D, D, 4), np.float32)
+            return
         tgt = region.astype(np.float32)
         if self.carry is None:
             self.carry = np.zeros((D, D, 4), np.float32)

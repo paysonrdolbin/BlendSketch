@@ -386,11 +386,21 @@ class NotesTree(QTreeWidget):
         if it is not None and not it.isSelected():
             self.clearSelection()
             it.setSelected(True)
+        m = self.build_menu()
+        if m is not None:
+            m.exec(self.viewport().mapToGlobal(pos))
+            m.deleteLater()
+
+    def build_menu(self) -> QMenu | None:
+        """The right-click menu for the current selection."""
         ids = self._selected_ids()
         if not ids:
-            return
+            return None
         mine = self._selected_mine()
-        m = QMenu(self)
+        # Parented to the window, not this tree, so the inspector's transparent styling can't reach it.
+        m = QMenu(self.window())
+        m.setObjectName("ContextMenu")
+        m.setAutoFillBackground(True)
         noun = self.kind if len(ids) != 1 else self.kind[:-1]
         m.addAction(f"Show {len(ids)} {noun}", lambda: self.itemToggled.emit(ids, True))
         m.addAction(f"Hide {len(ids)} {noun}", lambda: self.itemToggled.emit(ids, False))
@@ -403,7 +413,7 @@ class NotesTree(QTreeWidget):
         else:
             a = m.addAction("Delete (only your own notes can be deleted)")
             a.setEnabled(False)
-        m.exec(self.viewport().mapToGlobal(pos))
+        return m
 
 
 class ComposeBox(QWidget):
