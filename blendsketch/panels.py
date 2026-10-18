@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 
 from PySide6.QtCore import QItemSelectionModel, QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox,
@@ -431,16 +431,23 @@ def _dot(color: str) -> QIcon:
 class LayerTree(NotesTree):
     """The current frame's layers, top layer first, each with a show/hide checkbox.
 
-    Click a layer to draw on it (your own) or to select it. Checkboxes, multi-select,
+    Click a layer to draw on it (your own) or to select it. Drag your own layers (or
+    right-click ▸ Move up / down) to reorder them. Checkboxes, multi-select,
     Delete/Backspace and the right-click menu work as in the other notes trees.
     """
 
     layerPicked = Signal(str)
+    moveRequested = Signal(list, int)  # layer ids, the row (top first) to insert them before
+    stepRequested = Signal(list, int)  # layer ids, -1 up / +1 down
 
     def __init__(self, parent=None):
         super().__init__("layers", parent)
         self.setRootIsDecorated(False)
         self.setIndentation(0)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self._current_id = None
         self.currentItemChanged.connect(self._current)
 
@@ -460,7 +467,8 @@ class LayerTree(NotesTree):
             it = QTreeWidgetItem([label(r)])
             it.setData(0, ID_ROLE, r["id"])
             it.setData(0, MINE_ROLE, mine)
-            it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
+            flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable
+            it.setFlags(flags | Qt.ItemFlag.ItemIsDragEnabled if mine else flags)  # never a drop target: no nesting
             it.setCheckState(0, Qt.CheckState.Unchecked if r["id"] in hidden else Qt.CheckState.Checked)
             it.setIcon(0, _dot(author_color(r["author"])))
             if r["id"] in hidden:
@@ -488,6 +496,36 @@ class LayerTree(NotesTree):
         if cur is not None and cur.data(0, ID_ROLE):
             lid = cur.data(0, ID_ROLE)
             QTimer.singleShot(0, lambda: self.layerPicked.emit(lid))
+
+    def drop_row(self, pos) -> int:
+        """The row (top first) a drop at pos inserts before."""
+        it = self.itemAt(pos)
+        if it is None:
+            return self.topLevelItemCount()
+        i = self.indexOfTopLevelItem(it)
+        return i + 1 if pos.y() > self.visualItemRect(it).center().y() else i
+
+    def dropEvent(self, e):
+        # The window reorders the records and rebuilds the list; Qt mustn't move rows itself.
+        ids = self._selected_mine()
+        row = self.drop_row(e.position().toPoint())
+        e.setDropAction(Qt.DropAction.IgnoreAction)
+        e.accept()
+        if ids:
+            QTimer.singleShot(0, lambda: self.moveRequested.emit(ids, row))
+
+    def build_menu(self) -> QMenu | None:
+        m = super().build_menu()
+        mine = self._selected_mine()
+        if m is not None and mine:
+            first = m.actions()[0]
+            up = QAction("Move up", m)
+            up.triggered.connect(lambda: self.stepRequested.emit(mine, -1))
+            down = QAction("Move down", m)
+            down.triggered.connect(lambda: self.stepRequested.emit(mine, 1))
+            m.insertActions(first, [up, down])
+            m.insertSeparator(first)
+        return m
 
 
 class LayersPanel(QWidget):

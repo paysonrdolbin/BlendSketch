@@ -1,6 +1,6 @@
 """Layers: baked bitmaps that strokes are painted into, like Procreate.
 
-A layer is a record in the playlist (id, frame, author, name, blend, opacity) plus its
+A layer is a record in the playlist (id, frame, author, name, blend, opacity, order) plus its
 pixels, a source-resolution image saved as a PNG cropped to what's been painted. Strokes
 aren't kept: each one is painted into a layer when it's finished, with Normal blending at
 the stroke's opacity, so drawing costs the same however many strokes a frame has. The
@@ -30,6 +30,12 @@ def make_layer(frame: int, author: str, name: str, blend: str, lid: str | None =
     t = now()
     return {"id": lid or new_id(), "frame": frame, "author": author, "created": t, "modified": t, "deleted": False,
             "name": name, "blend": blend, "opacity": 1.0, "png": "", "x": 0, "y": 0}
+
+
+def layer_order(rec: dict) -> float:
+    """Where a layer sits in its frame's stack (higher is on top). Layers made before
+    reordering existed have no order and stack by creation time."""
+    return rec.get("order", rec["created"])
 
 
 def blank(w: int, h: int) -> QImage:

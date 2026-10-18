@@ -2,7 +2,7 @@
 
 Frame-accurate review for footage, with Procreate-style layers that blend (Multiply, Screen, Overlay and ten more), a smudge brush, and shared playlist files.
 
-**Layers.** Each frame's drawing lives in layers. A stroke is baked into the selected layer when you finish it, so a frame with hundreds of strokes draws as fast as one with a few. The blend mode and opacity belong to the layer: change them and the whole layer changes. Your first stroke on a frame makes a layer; **+** under the layer list (or Edit ▸ New Layer, ⇧⌘/Ctrl+Shift+N) adds another on top. You draw on your own layers only; clicking someone else's selects it so you can hide it, and your next stroke then starts a new layer of yours on top.
+**Layers.** Each frame's drawing lives in layers. A stroke is baked into the selected layer when you finish it, so a frame with hundreds of strokes draws as fast as one with a few. The blend mode and opacity belong to the layer: change them and the whole layer changes. Your first stroke on a frame makes a layer; **+** under the layer list (or Edit ▸ New Layer, ⇧⌘/Ctrl+Shift+N) adds another on top. You draw on (and reorder) your own layers only; clicking someone else's selects it so you can hide it, and your next stroke then starts a new layer of yours on top.
 
 The **eraser** (E) erases pixels from your selected layer. The **smudge** tool (S) picks up the selected layer's pixels under the brush and drags them along; the opacity slider becomes its strength, and pen pressure scales it. Neither touches the footage or other layers.
 
@@ -68,6 +68,7 @@ Layers                         Comments
 ```
 
 - Click one of your layers to draw on it; the selected layer is bold, and the blend mode and opacity controls edit it.
+- Drag your layers to reorder them, or right-click ▸ Move up / Move down (⇧⌘/Ctrl+Shift+↑ ↓ for the selected layer). You can put yours anywhere among other people's layers, but only move your own.
 - A layer's checkbox shows or hides it. For comments, a person's checkbox hides all of theirs, on every frame. Hiding is saved per playlist on your machine and never changes the file, so you can hide anyone's.
 - Select several (Shift- or ⌘/Ctrl-click). Clicking the checkbox of any selected row shows or hides all of them. Press Delete/Backspace, or right-click ▸ Delete. Only your own layers and comments are deleted; other people's are skipped and can only be hidden. ⌘/Ctrl+Z undoes a delete, a stroke, an erase or a smudge. Edit ▸ Delete My Layers on This Frame follows the same rule.
 

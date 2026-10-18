@@ -17,7 +17,7 @@ from .canvas import Canvas
 from .colors import author_color
 from .icons import icon
 from .media import MediaError, Player, VideoReader, frame_to_qimage, probe
-from .layers import LayerStore, make_layer, migrate
+from .layers import LayerStore, layer_order, make_layer, migrate
 from .panels import ComposeBox, LayersPanel, NotesTree, PlaylistPanel, PrefsDialog, scroll_wrap
 from .playlist import EXT, Playlist, PlaylistError, find_by_name, new_id, now
 from .prefs import Prefs
@@ -240,8 +240,8 @@ class MainWindow(QMainWindow):
         cbl.setSpacing(6)
         cbl.addWidget(self.comment_tree)
         cbl.addWidget(self.compose)
-        for title, w in (("Layers on this frame", self.layers_panel), ("Layer blend mode", self.blend), ("Color", self.color),
-                         ("Brush", self.brush), ("Comments on this frame", comments_box)):
+        for title, w in (("Layer blend mode", self.blend), ("Color", self.color), ("Brush", self.brush),
+                         ("Layers on this frame", self.layers_panel), ("Comments on this frame", comments_box)):
             il.addWidget(section_label(title))
             il.addWidget(w)
             sep = QWidget()
@@ -349,6 +349,8 @@ class MainWindow(QMainWindow):
         self.a_redo = act(e, "Redo", self.redo, QKeySequence.StandardKey.Redo)
         e.addSeparator()
         act(e, "New Layer", self.new_layer, "Ctrl+Shift+N")
+        act(e, "Move Layer Up", lambda: self._step_active(-1), "Ctrl+Shift+Up")
+        act(e, "Move Layer Down", lambda: self._step_active(1), "Ctrl+Shift+Down")
         act(e, "Delete My Layers on This Frame", self.clear_mine, None)
 
         t = mb.addMenu("&Tools")
@@ -411,6 +413,8 @@ class MainWindow(QMainWindow):
         lp.tree.layerPicked.connect(self.pick_layer)
         lp.tree.itemToggled.connect(lambda ids, on: self._items_toggled("layers", ids, on))
         lp.tree.deleteRequested.connect(lambda ids: self.delete_records("layers", ids))
+        lp.tree.moveRequested.connect(self.move_layers)
+        lp.tree.stepRequested.connect(self.step_layers)
         lp.add_btn.clicked.connect(self.new_layer)
         lp.opacity.sliderPressed.connect(self._opacity_pressed)
         lp.opacity.valueChanged.connect(self._opacity_value)
@@ -894,7 +898,7 @@ class MainWindow(QMainWindow):
         self.by_frame, self.all_by_frame = {}, {}
         marks: dict[int, list[str]] = {}
         if it:
-            for r in sorted(Playlist.live(it.get("layers", {})), key=lambda x: x["created"]):
+            for r in sorted(Playlist.live(it.get("layers", {})), key=lambda x: (layer_order(x), x["created"])):
                 self.all_by_frame.setdefault(r["frame"], []).append(r)
                 if r["id"] in self.hidden_layers:
                     continue
@@ -961,9 +965,55 @@ class MainWindow(QMainWindow):
         if not self._item() or not self.player.info:
             return
         f = self._frame()
-        rec = make_layer(f, self.prefs.author, self._next_layer_name(f), self.settings["blend"])
+        rec = self._make_layer(f)
         self.picked_layer[self._pick_key(f)] = rec["id"]
         self._record_changes([("layers", None, rec)])
+
+    def _make_layer(self, f: int) -> dict:
+        """A new layer of yours on top of frame f's layers."""
+        rec = make_layer(f, self.prefs.author, self._next_layer_name(f), self.settings["blend"])
+        top = max((layer_order(r) for r in self.all_by_frame.get(f, [])), default=rec["created"])
+        rec["order"] = max(rec["created"], top + 1)
+        return rec
+
+    def move_layers(self, ids: list[str], row: int):
+        """Move your layers among ids so they sit before `row` of the list (top first).
+
+        Only your own layers move: reordering rewrites a layer's record, and rewriting
+        someone else's could undo pixels they painted since your last merge. Yours can go
+        anywhere among theirs, since only your records change.
+        """
+        f = self._frame()
+        rows = list(reversed(self.all_by_frame.get(f, [])))  # top first
+        row = max(0, min(row, len(rows)))
+        moving = [r for r in rows if r["id"] in ids and r["author"] == self.prefs.author]
+        if not moving:
+            if ids:
+                self.status.showMessage("Only your own layers can be moved.", 4000)
+            return
+        row -= sum(1 for r in rows[:row] if r in moving)
+        rest = [r for r in rows if r not in moving]
+        above = rest[row - 1] if row > 0 else None
+        below = rest[row] if row < len(rest) else None
+        n = len(moving)
+        hi = layer_order(above) if above else (layer_order(below) + n + 1 if below else now())
+        lo = layer_order(below) if below else hi - n - 1
+        step = (hi - lo) / (n + 1)
+        changes = [("layers", copy.deepcopy(r), dict(r, order=hi - step * (k + 1))) for k, r in enumerate(moving)]
+        if [r["id"] for r in rest[:row] + moving + rest[row:]] != [r["id"] for r in rows]:
+            self._record_changes(changes)
+
+    def step_layers(self, ids: list[str], d: int):
+        """Move your selected layers one row up (d = -1) or down (d = 1)."""
+        rows = [r["id"] for r in reversed(self.all_by_frame.get(self._frame(), []))]
+        idx = [rows.index(i) for i in ids if i in rows]
+        if idx:
+            self.move_layers(ids, min(idx) - 1 if d < 0 else max(idx) + 2)
+
+    def _step_active(self, d: int):
+        a = self._active_layer()
+        if a is not None:
+            self.step_layers([a["id"]], d)
 
     def _set_layer(self, rec: dict, **fields):
         self._record_changes([("layers", copy.deepcopy(rec), dict(rec, **fields))])
@@ -1073,7 +1123,7 @@ class MainWindow(QMainWindow):
         if target is None:
             if s["kind"] in ("erase", "smudge"):
                 return
-            target = make_layer(s["frame"], self.prefs.author, self._next_layer_name(s["frame"]), self.settings["blend"])
+            target = self._make_layer(s["frame"])
             changes.append(("layers", None, target))
         rect, before, after = self.store.bake(target, s, w, h)
         changes.append(("px", target["id"], rect, before, after))

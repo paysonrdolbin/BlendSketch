@@ -205,6 +205,47 @@ def main():
     pump(0.1)
     assert len(win.canvas.layers) == 4, "and shown again"
 
+    # reordering: your own layers move, anywhere among others'; others' stay put
+    order = lambda: [r["id"] for r in win.canvas.layers]  # bottom to top
+    assert order() == ids
+    win.move_layers([ids[0]], 0)  # dana's bottom layer to the top of the list
+    assert order() == [ids[1], ids[2], ids[3], ids[0]], order()
+    assert [r.data(0, Qt.ItemDataRole.UserRole + 1) for r in rows(tree)][0] == ids[0], "list follows"
+    win.step_layers([ids[0]], 1)  # one row down: under lead's layer
+    assert order() == [ids[1], ids[2], ids[0], ids[3]], order()
+    win.move_layers([ids[3]], 4)  # lead's layer: not ours to move
+    assert order() == [ids[1], ids[2], ids[0], ids[3]]
+    tree.clearSelection()
+    row(ids[1]).setSelected(True)
+    m = tree.build_menu()
+    assert [a.text() for a in m.actions()][:2] == ["Move up", "Move down"]
+    m.deleteLater()
+    tree.clearSelection()
+    win.undo(); win.undo()
+    assert order() == ids, "undo puts them back"
+    win.redo()
+    assert order() == [ids[1], ids[2], ids[3], ids[0]]
+    win.save()
+    reopened = sorted(Playlist.live(Playlist.open(path).item(win.cur)["layers"]),
+                      key=lambda r: r.get("order", r["created"]))
+    assert [r["id"] for r in reopened] == order(), "order is saved"
+    win.undo()
+    assert order() == ids
+    # a real drop: drag dana's bottom layer (last row) onto the top half of the first row
+    from PySide6.QtCore import QMimeData, QPointF as QPF
+    from PySide6.QtGui import QDropEvent
+    tree.clearSelection()
+    row(ids[0]).setSelected(True)
+    first = tree.visualItemRect(rows(tree)[0])
+    at = QPF(first.center().x(), first.top() + 2)
+    drop = QDropEvent(at, Qt.DropAction.MoveAction, QMimeData(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+    tree.dropEvent(drop)
+    pump(0.05)
+    assert order() == [ids[1], ids[2], ids[3], ids[0]], ("dropped on top", order())
+    assert tree.topLevelItemCount() == 4, "no rows nested or lost"
+    win.undo()
+    assert order() == ids
+
     # right-click menu has a solid background (it used to inherit the inspector's transparency)
     from PySide6.QtGui import QColor
     m = tree.build_menu()
