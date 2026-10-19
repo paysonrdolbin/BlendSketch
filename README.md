@@ -42,6 +42,21 @@ Output: `dist/BlendSketch.app` on macOS, `dist/BlendSketch/BlendSketch.exe` on W
 
 The macOS build is ad-hoc signed, not notarized. On another Mac, the first launch needs right-click ▸ Open (or `xattr -dr com.apple.quarantine BlendSketch.app`).
 
+## Updating
+
+You only need to download the app once. After that, Help ▸ Check for Updates (or `BlendSketch --update` from a terminal) downloads just BlendSketch's own code, a few hundred kilobytes, and uses it from the next launch. The app also checks quietly a few seconds after it starts and says in the status bar when there's an update.
+
+```bash
+BlendSketch.app/Contents/MacOS/BlendSketch --update      # macOS
+BlendSketch/BlendSketch --update                         # Linux (BlendSketch.exe on Windows)
+```
+
+- Every push to `main` publishes the code to the repository's `code-latest` release (`.github/workflows/publish-code.yml`), after the tests pass.
+- Downloaded code lives in your user data folder (`~/Library/Application Support/BlendSketch/code` on macOS, `~/.local/share/BlendSketch/code` on Linux, `%LOCALAPPDATA%\BlendSketch\code` on Windows), never inside the app, so the app's signature stays intact.
+- When an update needs a newer app, because `requirements.txt` changed or the code imports something the app doesn't include, it isn't installed; the app sends you to the latest full release instead. Pushing a `v*` tag builds the apps and publishes that release.
+- If downloaded code fails to start, the app starts with its built-in code instead, and that update isn't offered again. `--bundled` always starts the built-in code; `--version` shows which code is running.
+- Running from source never updates itself; use `git pull`.
+
 ## How footage is found
 
 Each clip stores a path relative to the playlist file and the absolute path it was added from. When a playlist opens, BlendSketch tries, in order:
@@ -93,7 +108,7 @@ Scroll wheel or pinch zooms; trackpad scroll or middle-drag pans. Shift constrai
 
 ```
 blendsketch/
-  app.py        entry point, theme, --check
+  app.py        entry point, theme, --check, --update, --version
   window.py     main window: playlist, undo, autosave, merge polling, relinking, export
   canvas.py     viewer: zoom/pan, tablet pressure, layer compositing, live strokes, text, eyedropper loupe
   layers.py     layer records, baking strokes into pixels, PNG storage, converting old playlists
@@ -103,6 +118,8 @@ blendsketch/
   timeline.py   scrub bar
   widgets.py    blend, color (RGB/HSV/HSL/CMYK sliders, recent colors) and brush controls
   panels.py     playlist, authors, this frame, comments, preferences
-tests/          merge tests and an offscreen end-to-end test
+  update.py     downloading and installing newer app code
+bootstrap.py    starts the app, preferring downloaded code over the built-in copy
+tests/          merge and updater tests, and an offscreen end-to-end test
 prototype/      the original web version, for reference
 ```
