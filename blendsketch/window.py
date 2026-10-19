@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import copy
 import os
+import sys
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence
+from PySide6.QtCore import QEvent, QObject, QProcess, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPlainTextEdit, QPushButton, QSizePolicy, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget, QAbstractSpinBox,
 )
 
-from . import APP_NAME
+import bootstrap
+
+from . import APP_NAME, update
 from .canvas import Canvas
 from .colors import author_color
 from .icons import icon
@@ -58,6 +61,27 @@ class AltPicker(QObject):
         elif t == QEvent.Type.ApplicationDeactivate:
             self.win.end_temp_pick()
         return False
+
+
+class UpdateWorker(QThread):
+    """Checks for (and optionally installs) an update off the UI thread."""
+
+    done = Signal(dict)  # {"state", "message"}
+
+    def __init__(self, install: bool, parent=None):
+        super().__init__(parent)
+        self.install = install
+
+    def run(self):
+        try:
+            if self.install:
+                state, message = update.update()
+                r = {"state": state, "message": message}
+            else:
+                r = update.check()
+        except (update.UpdateError, OSError, KeyError, ValueError) as e:
+            r = {"state": "error", "message": str(e)}
+        self.done.emit(r)
 
 
 class MainWindow(QMainWindow):
@@ -108,6 +132,11 @@ class MainWindow(QMainWindow):
         else:
             self.resize(1480, 900)
         self._show_welcome()
+        self._update_worker = None
+        if bootstrap.FALLBACK:
+            QTimer.singleShot(0, lambda: self.status.showMessage(bootstrap.FALLBACK, 15000))
+        elif bootstrap.runtime() is not None:  # the packaged app: look for updates quietly
+            QTimer.singleShot(5000, lambda: self.check_updates(quiet=True))
 
     # ================================================================ UI
 
@@ -382,6 +411,10 @@ class MainWindow(QMainWindow):
         act(p, "Next Clip", lambda: self.step_clip(1), "Down")
         act(p, "Previous Clip", lambda: self.step_clip(-1), "Up")
         self.a_mute = act(p, "Mute", lambda: self.mute_btn.toggle(), "M")
+
+        h = mb.addMenu("&Help")
+        act(h, "Check for Updates…", lambda: self.check_updates(quiet=False)).setMenuRole(QAction.MenuRole.ApplicationSpecificRole)
+        act(h, f"About {APP_NAME}", self.about).setMenuRole(QAction.MenuRole.AboutRole)
 
     def _fill_recent_menu(self):
         self.recent_menu.clear()
@@ -1330,6 +1363,86 @@ class MainWindow(QMainWindow):
                         self.open_item(cur)
                 self._refresh_notes()
                 self._refresh_playlist()
+
+    # ================================================================ updates
+
+    def check_updates(self, quiet: bool):
+        """Look for newer app code. Quietly (at startup) just says so in the status bar."""
+        if self._update_worker is not None:
+            return
+        if not quiet:
+            self.status.showMessage("Checking for updates…")
+        self._update_worker = w = UpdateWorker(install=False, parent=self)
+        w.done.connect(lambda r: self._update_checked(r, quiet))
+        w.start()
+
+    def _update_checked(self, r: dict, quiet: bool):
+        self._update_worker = None
+        state, msg = r["state"], r["message"]
+        if quiet:
+            if state == "available":
+                self.status.showMessage(f"{msg} Install it with Help \u25b8 Check for Updates.", 15000)
+            return
+        self.status.clearMessage()
+        if state == "error":
+            QMessageBox.warning(self, "Couldn't check for updates", msg)
+        elif state == "needs_full":
+            box = QMessageBox(QMessageBox.Icon.Information, "New version of the app needed", msg,
+                              QMessageBox.StandardButton.Close, self)
+            page = box.addButton("Open Download Page", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
+            if box.clickedButton() is page:
+                QDesktopServices.openUrl(QUrl(update.DOWNLOAD_PAGE))
+        elif state == "available":
+            ans = QMessageBox.question(self, "Update available",
+                                       f"{msg}\n\nYou're running {update.describe(update.running())}. Install the update? "
+                                       "It takes a few seconds and is used the next time BlendSketch starts.")
+            if ans == QMessageBox.StandardButton.Yes:
+                self.status.showMessage("Installing update…")
+                self._update_worker = w = UpdateWorker(install=True, parent=self)
+                w.done.connect(self._update_installed)
+                w.start()
+        else:
+            QMessageBox.information(self, "Updates", msg)
+
+    def _update_installed(self, r: dict):
+        self._update_worker = None
+        self.status.clearMessage()
+        if r["state"] != "installed":
+            QMessageBox.warning(self, "Update not installed", r["message"])
+            return
+        box = QMessageBox(QMessageBox.Icon.Information, "Update installed", r["message"],
+                          QMessageBox.StandardButton.NoButton, self)
+        restart = box.addButton("Restart Now", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is restart:
+            self.restart()
+
+    def restart(self):
+        """Quit (asking to save first) and start the app again, which picks up an installed update."""
+        if not self.maybe_save():
+            return
+        args = [a for a in sys.argv[1:] if not a.endswith(EXT)]
+        if self.pl:
+            args.append(self.pl.path)
+        if getattr(sys, "frozen", False):
+            QProcess.startDetached(sys.executable, args)
+        else:
+            QProcess.startDetached(sys.executable, [os.path.abspath(sys.argv[0]), *args])
+        self.dirty = False
+        QApplication.instance().quit()
+
+    def about(self):
+        info = update.running()
+        lines = [f"Version {update.describe(info)}"]
+        if info.get("commit"):
+            lines.append(f"Commit {info['commit'][:12]}")
+        nxt = update.installed()
+        if nxt and nxt.get("commit") != info.get("commit"):
+            lines.append(f"Update {nxt['version']} runs after a restart.")
+        QMessageBox.about(self, f"About {APP_NAME}", f"<b>{APP_NAME}</b><br>" + "<br>".join(lines) +
+                          "<br><br>Frame-accurate review with blend-mode layers and shared playlists.")
 
     def closeEvent(self, e):
         if not self.maybe_save():
